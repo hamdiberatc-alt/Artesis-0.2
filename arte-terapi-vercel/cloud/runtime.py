@@ -158,7 +158,7 @@ def install(app):
                 return True
             except Exception as error:
                 # Never expose credentials or database details in public error responses.
-                print('Cloud initialization failed:', type(error).__name__)
+                print('Cloud initialization failed:', type(error).__name__, str(error))
                 self._send({'error': 'Bulut veritabanı başlatılamadı. TURSO_DATABASE_URL, TURSO_AUTH_TOKEN ve ARTE_ADMIN_PASSWORD ayarlarını kontrol edin.'}, 503)
                 return False
         def do_GET(self):
