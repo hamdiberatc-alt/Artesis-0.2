@@ -1,0 +1,2 @@
+# Python 3.12+; yalnız standart kütüphane kullanılır.
+# Veritabanı: Turso libSQL HTTP API; istemci kodu cloud/db.py içindedir.
