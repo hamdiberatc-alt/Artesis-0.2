@@ -10,6 +10,8 @@ import threading
 import time
 import urllib.parse
 import zipfile
+from contextlib import contextmanager
+from functools import lru_cache
 from . import db
 
 SCHEMA = '''
@@ -23,6 +25,12 @@ PDF_LIMIT = 2 * 1024 * 1024
 
 def ensure_schema(c, password_hash):
     """Initialize only an empty database, under a remote writer lock."""
+    # A new serverless worker must not take a writer lock on an installed DB.
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_meta'").fetchone():
+        version = c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()
+        if not version or version[0] != CLOUD_VERSION:
+            raise ValueError('Bulut şeması uyumsuz. Güncelleme öncesi yedek alın.')
+        return
     c.execute('BEGIN IMMEDIATE')
     c.execute('PRAGMA defer_foreign_keys=ON')
     try:
@@ -34,6 +42,7 @@ def ensure_schema(c, password_hash):
         elif tables:
             raise ValueError('Hedef veritabanı boş değil. Yeni, boş bir Turso veritabanı seçin veya aktarım aracını kullanın.')
         else:
+            if callable(password_hash): password_hash = password_hash()
             c.executescript((Path(__file__).parent / 'seed.sql').read_text(encoding='utf-8'))
             c.executescript(SCHEMA)
             c.execute("INSERT INTO ayarlar(anahtar,deger) VALUES('admin_password_hash',?)", (password_hash,))
@@ -79,7 +88,29 @@ def install(app):
     if hasattr(time, 'tzset'): time.tzset()
     init_lock = threading.Lock()
     ready = False
-    app['_DB_310'] = db.connect  # Preserve nested, atomic registration helpers.
+    request_state = threading.local()
+
+    def request_connect():
+        # Read handlers borrow one connection; writes keep their transaction owner.
+        if getattr(request_state, 'active', False):
+            if request_state.connection is None:
+                request_state.connection = db.connect()
+            return app['_BorrowedConnection'](request_state.connection)
+        return db.connect()
+
+    @contextmanager
+    def read_request():
+        request_state.active = True
+        request_state.connection = None
+        try:
+            yield
+        finally:
+            c = request_state.connection
+            request_state.active = False
+            request_state.connection = None
+            if c is not None: c.close()
+
+    app['_DB_310'] = request_connect
 
     def init_db():
         nonlocal ready
@@ -90,9 +121,8 @@ def install(app):
             password = os.getenv('ARTE_ADMIN_PASSWORD', '')
             if len(password) < 16:
                 raise ValueError('ARTE_ADMIN_PASSWORD en az 16 karakter olmalı; Vercel ortam değişkenlerinden ayarlayın.')
-            password_hash = app['_password_hash'](password)
             c = db.connect()
-            try: ensure_schema(c, password_hash)
+            try: ensure_schema(c, lambda: app['_password_hash'](password))
             finally: c.close()
             ready = True
 
@@ -142,6 +172,7 @@ def install(app):
         return count <= limit
 
     original_html = app['build_html']
+    @lru_cache(maxsize=1)
     def cloud_html():
         return original_html().replace('v3.13.0', 'v3.14.0 Bulut').replace('Yedek indir', 'Yedekleme').replace('en çok 10 MB', 'en çok 2 MB').replace('f.size>10*1024*1024', 'f.size>2*1024*1024').replace('PDF en çok 10 MB olabilir.', 'PDF en çok 2 MB olabilir.').replace('Sürüm geçişinden önce otomatik yedek alınır.', 'Bulut tam yedeği bilgisayardaki yedekleme aracıyla alınır; kurulum rehberini izleyin.')
     app['build_html'] = cloud_html
@@ -162,8 +193,12 @@ def install(app):
                 self._send({'error': 'Bulut veritabanı başlatılamadı. TURSO_DATABASE_URL, TURSO_AUTH_TOKEN ve ARTE_ADMIN_PASSWORD ayarlarını kontrol edin.'}, 503)
                 return False
         def do_GET(self):
+            with read_request():
+                return self._get()
+        def _get(self):
             path = urllib.parse.urlparse(self.path).path
             if path == '/favicon.ico': return self._send(b'', 204, 'image/x-icon')
+            if path == '/': return super().do_GET()
             if not self._ready(): return
             if path == '/api/backup':
                 if not self._auth(): return self._send({'error': 'Oturum açınız.'}, 401)
@@ -194,3 +229,4 @@ def install(app):
     app.update(init_db=init_db, read_report_blob=read_report,
                rapor_pdf_kaydet=save_report, rapor_pdf_sil=delete_report,
                backup_bytes=backup, Handler=CloudHandler, APP_VERSION='3.14.0-cloud')
+

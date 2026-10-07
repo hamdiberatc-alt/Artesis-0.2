@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 61807)
+Total output lines: 4183
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -2437,193 +2440,7 @@ def danisan_detay(did):
     rows = list(reversed(rows))
     d['siklik_grafik'] = {
         'labels': [r['ilk_tarih'] for r in rows],
-        'gelen': [int(r.get('gelen') or 0) for r in rows],
-        'gelmedi': [int(r.get('gelmedi_sayisi') or 0) for r in rows],
-    }
-    d['gelen_tarihleri'] = [x['tarih'] + (f" {str(x.get('saat') or '')[:5]}" if (x.get('saat') or '') else '') for x in d['seans_gecmisi'] if int(x.get('gelmedi') or 0) == 0][:60]
-    conn.close()
-    return d
-
-
-def _safe_pdf_name(name):
-    name = re.sub(r'[^\w\-. ]+', '_', str(name or 'rapor.pdf')).strip() or 'rapor.pdf'
-    if not name.lower().endswith('.pdf'):
-        name += '.pdf'
-    return name
-
-
-def rapor_pdf_kaydet(d):
-    danisan_id = int(d['danisan_id'])
-    terapist_id = int(d['terapist_id']) if str(d.get('terapist_id') or '').strip() else None
-    tarih = (d.get('tarih') or date.today().isoformat())[:10]
-    dosya_adi = _safe_pdf_name(d.get('dosya_adi') or 'rapor.pdf')
-    raw = d.get('base64') or ''
-    if raw.startswith('data:'):
-        raw = raw.split(',', 1)[1] if ',' in raw else ''
-    blob = base64.b64decode(raw or b'', validate=False)
-    if not blob or not blob.startswith(b'%PDF'):
-        raise ValueError('Yalnızca PDF dosyası yüklenebilir')
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    save_name = f"danisan_{danisan_id}_{ts}_{dosya_adi}"
-    save_path = os.path.join(get_reports_dir(), save_name)
-    with open(save_path, 'wb') as f:
-        f.write(blob)
-    conn = get_db(); c = conn.cursor()
-    c.execute("""INSERT INTO danisan_rapor_dosyalari(danisan_id, terapist_id, tarih, dosya_adi, dosya_yolu, mime_tur, boyut)
-                 VALUES(?,?,?,?,?,?,?)""", (danisan_id, terapist_id, tarih, dosya_adi, save_path, 'application/pdf', len(blob)))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
-
-
-def rapor_pdf_sil(rid):
-    conn = get_db()
-    row = q(conn, "SELECT dosya_yolu FROM danisan_rapor_dosyalari WHERE id=?", (rid,))
-    if row:
-        try:
-            if os.path.exists(row[0]['dosya_yolu']):
-                os.remove(row[0]['dosya_yolu'])
-        except Exception:
-            pass
-    conn.execute("DELETE FROM danisan_rapor_dosyalari WHERE id=?", (rid,))
-    conn.commit(); conn.close(); return {'ok': True}
-
-
-def _serve_pdf_file(handler, rid):
-    conn = get_db()
-    rows = q(conn, "SELECT * FROM danisan_rapor_dosyalari WHERE id=?", (rid,))
-    conn.close()
-    if not rows:
-        handler.send_response(404); handler.end_headers(); return
-    row = rows[0]
-    path = row.get('dosya_yolu') or ''
-    if not path or not os.path.exists(path):
-        handler.send_response(404); handler.end_headers(); return
-    with open(path, 'rb') as f:
-        b = f.read()
-    handler.send_response(200)
-    handler.send_header('Content-Type', 'application/pdf')
-    handler.send_header('Content-Length', str(len(b)))
-    handler.send_header('Content-Disposition', f'inline; filename="{_safe_pdf_name(row.get("dosya_adi") or "rapor.pdf")}"')
-    handler.end_headers()
-    handler.wfile.write(b)
-
-
-
-
-
-
-
-
-
-
-# ── v3.9.0: consistent records, packages, reporting and authenticated HTTP ──
-import hashlib, hmac, math, time, zipfile, tempfile, html as html_lib
-from decimal import Decimal, ROUND_HALF_UP
-from contextlib import contextmanager
-from http.cookies import SimpleCookie
-from functools import wraps
-
-APP_VERSION = '3.9.0'
-_SCHEMA_INIT = init_db
-_INIT_LOCK = threading.RLock()
-_WRITE_LOCK = threading.RLock()
-_INITIALIZED_PATHS = set()
-
-def money(value):
-    try:
-        n = Decimal(str(value or 0))
-        if not n.is_finite() or n < 0 or n > Decimal('1000000000'):
-            raise ValueError()
-        return float(n.quantize(Decimal('.01'), rounding=ROUND_HALF_UP))
-    except Exception:
-        raise ValueError('Tutar 0 ile 1 milyar arasında geçerli bir sayı olmalıdır.')
-
-def integer(value, low=0, high=100000):
-    try:
-        n = int(str(value))
-        if not low <= n <= high: raise ValueError()
-        return n
-    except Exception: raise ValueError(f'Tam sayı {low}–{high} aralığında olmalıdır.')
-
-def flag(value): return 1 if str(value).lower() in ('1','true','on') else 0
-
-def valid_date(value):
-    try: return date.fromisoformat(str(value)).isoformat()
-    except Exception: raise ValueError('Tarih YYYY-AA-GG biçiminde olmalıdır.')
-
-def valid_time(value):
-    try:
-        text = str(value)
-        if len(text) != 5: raise ValueError()
-        datetime.strptime(text, '%H:%M')
-        return text
-    except Exception: raise ValueError('Saat SS:DD biçiminde olmalıdır.')
-
-def required(value, label='Alan'):
-    value = str(value or '').strip()
-    if not value: raise ValueError(label + ' zorunludur.')
-    if len(value)>20000: raise ValueError(label + ' çok uzun.')
-    return value
-
-def get_db():
-    c = sqlite3.connect(DB_PATH, timeout=20)
-    c.row_factory = sqlite3.Row
-    c.execute('PRAGMA foreign_keys=ON')
-    c.execute('PRAGMA busy_timeout=20000')
-    return c
-
-@contextmanager
-def transaction():
-    with _WRITE_LOCK:
-        c = get_db()
-        try:
-            c.execute('BEGIN IMMEDIATE')
-            yield c
-            c.commit()
-        except Exception:
-            c.rollback(); raise
-        finally: c.close()
-
-def exists(c, table, ident, label='Kayıt'):
-    if not ident: raise ValueError(label + ' seçiniz.')
-    row = c.execute('SELECT * FROM '+table+' WHERE id=?', (ident,)).fetchone()
-    if not row: raise ValueError(label + ' bulunamadı.')
-    return dict(row)
-
-def backup_bytes():
-    buf=io.BytesIO()
-    with tempfile.TemporaryDirectory() as tmp:
-        dest=os.path.join(tmp,'arteterapi.db')
-        a=get_db(); b=sqlite3.connect(dest)
-        try: a.backup(b)
-        finally: a.close(); b.close()
-        with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
-            z.write(dest,'arteterapi.db')
-            conn=get_db()
-            try:
-                tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                files=q(conn,'SELECT id,dosya_yolu FROM danisan_rapor_dosyalari') if 'danisan_rapor_dosyalari' in tables else []
-            finally: conn.close()
-            for r in files:
-                if os.path.isfile(r['dosya_yolu']): z.write(r['dosya_yolu'],'rapor_pdfler/'+str(r['id'])+'.pdf')
-            z.writestr('OKU.txt','Veritabanı ve PDF dosyaları birlikte yedeklendi. Geri yüklerken uygulama kapalı olmalıdır. DB dosyasını veri klasörüne, rapor_pdfler klasörünü aynı dizine koyun. Uygulama açılışta rapor yollarını yeniden eşler.')
-    return buf.getvalue()
-
-def init_db():
-    with _INIT_LOCK:
-        key=os.path.abspath(DB_PATH)
-        if key in _INITIALIZED_PATHS: return
-        if os.path.isfile(DB_PATH) and os.path.getsize(DB_PATH):
-            c=get_db()
-            try:
-                try: done=c.execute("SELECT deger FROM ayarlar WHERE anahtar='schema_390'").fetchone()
-                except sqlite3.Error: done=None
-            finally:c.close()
-            if not done:
-                folder=os.path.join(os.path.dirname(DB_PATH),'yedekler');os.makedirs(folder,exist_ok=True)
-                with open(os.path.join(folder,'v390_oncesi_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f')+'.zip'),'wb') as f:f.write(backup_bytes())
-        _SCHEMA_INIT()
-        with transaction() as c:
-            c.executescript('''
+ …1807 tokens truncated…''
             CREATE TABLE IF NOT EXISTS pilates_paketleri(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, danisan_id INTEGER NOT NULL,
                 ad TEXT NOT NULL, fiyat REAL NOT NULL DEFAULT 0,
@@ -4098,8 +3915,11 @@ def hizmetler_listesi(terapist_id=None,include_inactive=False):
     c=get_db()
     try:
         rows=q(c,'SELECT h.* FROM hizmet_alanlari h WHERE 1=1'+('' if include_inactive else ' AND h.aktif=1')+(' AND EXISTS(SELECT 1 FROM hizmet_terapistleri a WHERE a.hizmet_id=h.id AND a.terapist_id=?)' if terapist_id else '')+' ORDER BY h.alan_adi,h.id',[terapist_id] if terapist_id else [])
+        assignments={}
+        for t in q(c,"SELECT a.hizmet_id,t.id,t.ad||' '||COALESCE(t.soyad,'') ad,t.aktif FROM hizmet_terapistleri a JOIN terapistler t ON t.id=a.terapist_id ORDER BY t.ad,t.id"):
+            hid=t.pop('hizmet_id');assignments.setdefault(hid,[]).append(t)
         for h in rows:
-            h['terapistler']=q(c,"SELECT t.id,t.ad||' '||COALESCE(t.soyad,'') ad,t.aktif FROM hizmet_terapistleri a JOIN terapistler t ON t.id=a.terapist_id WHERE a.hizmet_id=? ORDER BY t.ad,t.id",(h['id'],))
+            h['terapistler']=assignments.get(h['id'],[])
             h['terapist_ids']=[t['id'] for t in h['terapistler']];h['terapist_adi']=', '.join(t['ad'].strip() for t in h['terapistler'])
         return rows
     finally:c.close()
@@ -4177,3 +3997,4 @@ if CLOUD_MODE:
 
 if __name__ == '__main__':
     _run_app()
+

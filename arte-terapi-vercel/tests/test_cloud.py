@@ -2,6 +2,7 @@
 SQLite and the actual application; no live Turso/Vercel account is required.
 """
 import base64
+import hashlib
 import io
 import json
 import os
@@ -24,12 +25,15 @@ from cloud.runtime import ensure_schema, export_backup
 
 class HranaSimulator:
     def __init__(self, path): self.path, self.connections = path, {}
+    def reset_metrics(self): self.connects=0;self.roundtrips=0
     def __call__(self, payload):
+        if hasattr(self,'roundtrips'): self.roundtrips+=1
         baton = payload.get('baton')
         if baton:
             if baton not in self.connections: raise RuntimeError('Expired baton')
             c = self.connections[baton]
         else:
+            if hasattr(self,'connects'): self.connects+=1
             baton = secrets.token_hex(16)
             c = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
             self.connections[baton] = c
@@ -114,6 +118,21 @@ class CloudTest(unittest.TestCase):
         os.environ['ARTE_ADMIN_PASSWORD']='short'
         m=runpy.run_path(str(ROOT/'app.py'))
         with self.assertRaises(ValueError):m['init_db']()
+    def test_authenticated_get_reuses_one_connection(self):
+        token='read-request-session'
+        c=self.connect()
+        c.execute('INSERT INTO auth_sessions VALUES(?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),'csrf',9999999999))
+        c.commit();c.close();self.sim.reset_metrics()
+        handler=self.app['Handler'].__new__(self.app['Handler'])
+        handler.path='/api/bootstrap'
+        handler.headers={'Cookie':'arte_session='+token}
+        handler.client_address=('127.0.0.1',0)
+        responses=[];handler._send=lambda body,status=200,**kwargs:responses.append((body,status))
+        handler.do_GET()
+        self.assertEqual(responses[-1][1],200)
+        self.assertEqual(self.sim.connects,1)
+        self.assertEqual(self.sim.roundtrips,10)
+        self.assertEqual(self.sim.connections,{})
     def test_http_auth_csrf_and_setup_block(self):
         import http.client
         server=ThreadingHTTPServer(('127.0.0.1',0),self.app['Handler'])
@@ -143,3 +162,4 @@ class CloudTest(unittest.TestCase):
         self.assertEqual(len(calls),1)
 
 if __name__=='__main__': unittest.main()
+

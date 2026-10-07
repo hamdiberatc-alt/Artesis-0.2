@@ -22,15 +22,37 @@ const monday=s=>{const d=new Date(s+'T12:00:00');return addDays(s,-((d.getDay()+
 const state={csrf:'',setup:false,boot:{},page:'planlar',rows:[],edit:{},week:monday(today()),weekTherapist:'',start:today().slice(0,7)+'-01',end:today(),reportTherapist:'',report:null,client:null,targets:[]};
 const names={gelir:'Gelir Raporları',pilates:'Pilates',danisanlar:'Danışanlar',seanslar:'Seanslar',paketler:'Pilates Paketleri',planlar:'Haftalık Program',randevular:'Randevular',odemeler:'Ödemeler',giderler:'Giderler',kasa:'Kasa',mesajlar:'Hatırlatmalar',terapistler:'Terapistler',hizmetler:'Hizmetler',odalar:'Odalar',stok:'Stok',kaynaklar:'Kaynaklar',rezervasyonlar:'Kaynak Takvimi',sablonlar:'Mesaj Şablonları',kurallar:'Otomasyon',portal:'Danışan Portalı',ayarlar:'Ayarlar'};
 function toast(text,error=false){$('toast').textContent=text;$('toast').style.background=error?'#a3233b':'#24303d';$('toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').style.display='none',error?10000:3500)}
-async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf},body:data?JSON.stringify(data):undefined});let j;try{j=await r.json()}catch{throw Error('Sunucu yanıtı okunamadı.')}if(!r.ok){if(r.status===401&&path!='/api/login'){$('app').classList.add('hide');$('login').classList.remove('hide')}throw Error(j.error||'İşlem başarısız.')}return j}
-async function boot(){state.boot=await api('/api/bootstrap');state.pilatesData=await api('/api/list?kind=pilates');$('brand').textContent='☀ '+state.boot.klinik;$('nav').innerHTML=Object.entries(names).filter(([k])=>['planlar','danisanlar','pilates','gelir','portal','ayarlar'].includes(k)).sort(([a],[b])=>['planlar','danisanlar','pilates','gelir','portal','ayarlar'].indexOf(a)-['planlar','danisanlar','pilates','gelir','portal','ayarlar'].indexOf(b)).map(([k,v])=>`<button data-nav="${k}" class="${k===state.page?'active':''}">${esc(v)}</button>`).join('')}
+// Keep recently viewed data only in this page's memory. Every write, auth
+// failure and return to this browser tab invalidates it, including pending reads.
+const readCache=new Map();let cacheEpoch=0;
+const READ_TTL=30000;
+const copyData=value=>JSON.parse(JSON.stringify(value));
+function invalidateReads(){cacheEpoch++;readCache.clear()}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)invalidateReads()});
+async function requestJson(path,data){const r=await fetch(path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf},body:data?JSON.stringify(data):undefined});let j;try{j=await r.json()}catch{throw Error('Sunucu yanıtı okunamadı.')}if(!r.ok){if(r.status===401){invalidateReads();if(path!='/api/login'){$('app').classList.add('hide');$('login').classList.remove('hide')}}throw Error(j.error||'İşlem başarısız.')}return j}
+async function api(path,data){
+ if(data){invalidateReads();try{return await requestJson(path,data)}finally{invalidateReads()}}
+ if(!/^\/api\/(bootstrap|list|week|report|client|mobile)(\?|$)/.test(path))return requestJson(path);
+ const now=Date.now(),cached=readCache.get(path);
+ if(cached&&now-cached.time<READ_TTL)return copyData(await cached.promise);
+ for(const [key,value] of readCache)if(now-value.time>=READ_TTL)readCache.delete(key);
+ if(readCache.size>=100)readCache.delete(readCache.keys().next().value);
+ const epoch=cacheEpoch,entry={time:now};
+ entry.promise=requestJson(path).catch(error=>{if(readCache.get(path)===entry)readCache.delete(path);throw error});
+ readCache.set(path,entry);
+ const value=await entry.promise;
+ if(epoch!==cacheEpoch&&readCache.get(path)===entry)readCache.delete(path);
+ return copyData(value);
+}
+async function boot(){[state.boot,state.pilatesData]=await Promise.all([api('/api/bootstrap'),api('/api/list?kind=pilates')]);$('brand').textContent='☀ '+state.boot.klinik;$('nav').innerHTML=Object.entries(names).filter(([k])=>['planlar','danisanlar','pilates','gelir','portal','ayarlar'].includes(k)).sort(([a],[b])=>['planlar','danisanlar','pilates','gelir','portal','ayarlar'].indexOf(a)-['planlar','danisanlar','pilates','gelir','portal','ayarlar'].indexOf(b)).map(([k,v])=>`<button data-nav="${k}" class="${k===state.page?'active':''}">${esc(v)}</button>`).join('')}
 const option=(v,t,selected)=>`<option value="${esc(v)}" ${String(v)===String(selected)?'selected':''}>${esc(t)}</option>`;
 const opts=(list,val,label=x=>x.ad,empty='Seçiniz')=>option('',empty,val)+(list||[]).map(x=>option(x.id,label(x),val)).join('');
 const btn=(label,action,id='',extra='')=>`<button type="button" data-action="${action}" data-id="${esc(id)}" ${extra}>${esc(label)}</button>`;
 const table=(headers,rows)=>`<div class="tablewrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.length?rows.join(''):`<tr><td colspan="${headers.length}" class="empty">Kayıt yok</td></tr>`}</tbody></table></div>`;
 const tr=cells=>'<tr>'+cells.map(c=>'<td>'+c+'</td>').join('')+'</tr>';
 function toolbar(title,sub='',actions=''){return `<div class="toolbar"><div><h1>${esc(title)}</h1><div class="muted">${esc(sub)}</div></div><div class="actions">${actions}</div></div>`}
-async function navigate(page){state.page=page;state.client=null;await boot();$('main').innerHTML='<p>Yükleniyor…</p>';await render()}
+let navigationVersion=0;
+async function navigate(page){const version=++navigationVersion;state.page=page;state.client=null;$('main').innerHTML='<p role="status">Yükleniyor…</p>';await boot();if(version!==navigationVersion)return;await render()}
 async function render(){const page=state.page;if(page==='pilates')return renderPilates();if(page==='planlar')return renderProgramCalendar(false);if(page==='gelir')return renderReport();if(page==='seanslar')return renderWeek();if(page==='mesajlar')return renderMessages();if(page==='ayarlar')return renderSettings();if(page==='client')return showClient(state.client);let data=await api('/api/list?kind='+page);if(page==='portal')return renderPortal(data);if(page==='stok'){state.stockMoves=data.hareketler;data=data.items}state.rows=data;let actions=btn(page==='hizmetler'?'Hizmet ekle':'Yeni kayıt','new');if(page==='stok')actions+=btn('Stok hareketi','stockmove');if(page==='kurallar')actions+=btn('Hazırlığı çalıştır','automation');$('main').innerHTML=toolbar(names[page],page==='paketler'?'Paket ücreti ve ücretli/hediye hakları ayrı takip edilir.':page==='danisanlar'?'Aynı danışanı birden fazla terapiste bağlayabilirsiniz.':'',actions)+renderList(page,data);if(page==='stok')$('main').innerHTML+=table(['Tarih','Kalem','Hareket','Miktar'],state.stockMoves.map(r=>tr([esc(r.tarih),esc(r.kalem_adi),esc(r.tur),esc(r.miktar)])))}
 function renderList(page,data){
 const edit=r=>btn('Düzenle',page==='tarifeler'?'p-edittariff':state.page==='pilates'&&page==='paketler'?'p-editpackage':'edit',r.id);const del=r=>btn(page==='danisanlar'?'Arşivle':'Sil','delete',r.id,'class="danger"');
@@ -294,3 +316,4 @@ action=async function(name,id){if(name==='package-edit-direct'){const p=state.bo
 
 (async()=>{try{const s=await api('/api/session');state.setup=s.setup;state.csrf=s.csrf;if(s.setup&&!s.setup_allowed){$('login-info').textContent='İlk parolayı uygulamanın açık olduğu bilgisayarda oluşturun, sonra bu sayfayı yenileyin.';$('login-form').classList.add('hide');return;}if(s.authenticated){$('login').classList.add('hide');$('app').classList.remove('hide');await navigate('planlar')}else{$('login-info').textContent=s.setup?'İlk kullanım: en az 8 karakterli yönetici parolanızı belirleyin.':'Klinik kayıtlarına erişmek için giriş yapın.';$('login-form').querySelector('button').textContent=s.setup?'Parolayı oluştur':'Giriş yap';$('password').autocomplete=s.setup?'new-password':'current-password'}}catch(err){$('login-error').textContent=err.message}})();
 </script></body></html>
+
