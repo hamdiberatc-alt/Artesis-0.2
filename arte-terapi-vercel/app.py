@@ -3455,7 +3455,7 @@ def schedule_conflicts(kind,d):
                 if aend<bstart or bend<astart:continue
                 if r.get('durum')=='iptal' or r.get('gelmedi'):continue
                 if not _aralik_cakisiyor(start,duration,r.get('saat'),r.get('sure_dk')):continue
-                sameclient=equal(d.get('danisan_id'),r.get('danisan_id'));sametherapist=equal(d.get('terapist_id'),r.get('terapist_id'));sameroom=equal(d.get('oda_id'),r.get('oda_id'));sameres=equal(d.get('kaynak_id'),r.get('kaynak_id'))
+                sameclient=equal(d.get('danisan_id'),r.get('danisan_id'));sametherapist=equal(d.get('terapist_id'),r.get('terapist_id'));sameroom=equal(d.get('oda_id'),r.get('oda_id'));sameroomslot=sameroom or (not d.get('oda_id') and not r.get('oda_id'));sameres=equal(d.get('kaynak_id'),r.get('kaynak_id'))
                 if category!=kind and sameclient and sametherapist and start==r.get('saat') and equal(d.get('hizmet_id'),r.get('hizmet_id')):continue # planned/actual occurrence of the same session
                 if kind=='rezervasyonlar' and d.get('kaynak_id'):
                     resource=exists(c,'kaynaklar',d['kaynak_id']);sameroom=sameroom or equal(resource.get('bagli_oda_id'),r.get('oda_id'))
@@ -3467,7 +3467,7 @@ def schedule_conflicts(kind,d):
         if d.get('paket_id'):
             p=exists(c,'pilates_paketleri',d['paket_id']);group=p['grup_turu'];capacity=int(group[-1]) if group in ('grup2','grup3') else 1
         for category,r,client,therapist,room,res in candidates:
-            isgroup=capacity>1 and group==r.get('grup_turu','bireysel') and not client and not res and start==r.get('saat') and sameduration(duration,r.get('sure_dk')) and therapist and room
+            isgroup=capacity>1 and group==r.get('grup_turu','bireysel') and not client and not res and start==r.get('saat') and sameduration(duration,r.get('sure_dk')) and therapist and sameroomslot
             if isgroup:
                 same_people={str(x[1].get('danisan_id')) for x in candidates if x[1].get('saat')==start and x[3] and x[4]}
                 roomcap=exists(c,'odalar',d['oda_id'])['kapasite'] if d.get('oda_id') else capacity
