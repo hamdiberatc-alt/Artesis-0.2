@@ -59,6 +59,18 @@ class PilatesTest(AppTest):
   for did,pid in ((self.a,pa),(self.b,pb)):
    sid=self.call('_save_kind','seanslar',{'danisan_id':did,'terapist_id':3,'hizmet_id':11,'paket_id':pid,'tarih':self.today,'saat':'18:00','sure_dk':45,'grup_turu':'grup2','gelmedi':0,'hak_dustu':0})
    self.assertTrue(sid)
+ def test_group_attendance_is_atomic_and_consumes_every_member_package(self):
+  end=(date.today()+timedelta(days=30)).isoformat()
+  pa=self.call('paket_kaydet',{'danisan_id':self.a,'ad':'Grup A','fiyat':4000,'seans_sayisi':8,'hediye_seans':0,'grup_turu':'grup2','baslangic':self.today,'bitis':end})
+  pb=self.call('paket_kaydet',{'danisan_id':self.b,'ad':'Grup B','fiyat':4000,'seans_sayisi':8,'hediye_seans':0,'grup_turu':'grup2','baslangic':self.today,'bitis':end})
+  gid=self.call('grup_kaydet',{'ad':'Birlikte katılım','kapasite':2,'uyeler':[{'danisan_id':self.a,'paket_id':pa},{'danisan_id':self.b,'paket_id':pb}]})
+  self.call('_save_kind','grup_programi',{'grup_id':gid,'terapist_id':3,'hizmet_id':11,'sure_dk':45,'baslangic':self.today,'bitis':end,'slots':[{'gun_index':date.today().weekday(),'saat':'18:00'}],'paketler':{str(self.a):pa,str(self.b):pb}})
+  plans=self.rows('SELECT id,danisan_id,paket_id FROM haftalik_program_sablonlari ORDER BY danisan_id')
+  with self.assertRaises(ValueError):self.call('_save_kind','grup_katilim',{'tarih':self.today,'uyeler':[{'id':plans[0]['id'],'kaynak':'planli'},{'id':999999,'kaynak':'planli'}]})
+  self.assertEqual(self.rows('SELECT id FROM seanslar'),[])
+  result=self.call('_save_kind','grup_katilim',{'tarih':self.today,'uyeler':[{'id':p['id'],'kaynak':'planli'} for p in plans]})
+  self.assertEqual(result['members'],2)
+  self.assertEqual(self.rows('SELECT danisan_id,paket_id,hak_dustu FROM seanslar ORDER BY danisan_id'),[{'danisan_id':self.a,'paket_id':pa,'hak_dustu':1},{'danisan_id':self.b,'paket_id':pb,'hak_dustu':1}])
 
 def load_tests(loader, tests, pattern):
  return unittest.TestSuite(PilatesTest(name) for name in PilatesTest.__dict__ if name.startswith("test_"))
