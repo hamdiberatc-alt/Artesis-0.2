@@ -16,3 +16,5 @@ assert(fs.readFileSync(require('path').join(__dirname,'../web/index.html'),'utf8
 console.log('PASS: Pilates-only program service, direct attendance save without opening an editor, service management and package controls.');
 })().catch(e=>{console.error(e);process.exitCode=1});
 
+
+const weeklySource=fs.readFileSync(require('path').join(__dirname,'../web/index.html'),'utf8');assert(!weeklySource.includes('board-mode'));assert(!weeklySource.includes('board-select'));assert(weeklySource.includes('Haftalık Pilates Programı'));assert(weeklySource.includes('8:6,10:6,16:12,20:12,24:18,32:18'));
