@@ -2763,6 +2763,21 @@ def paketler_listesi(danisan_id=None):
         return rows
     finally:c.close()
 
+def _paket_seanslarini_yeniden_fiyatlandir(c,paket_id,toplam,seans_sayisi):
+    """Keep every consumed paid session on the package's fixed per-session price."""
+    rows=q(c,'SELECT id,prim_orani FROM seanslar WHERE paket_id=? AND hak_dustu=1 AND hediye=0 ORDER BY tarih,saat,id',(paket_id,))
+    unit=money(Decimal(str(toplam))/seans_sayisi)
+    for index,row in enumerate(rows):
+        amount=money(Decimal(str(toplam))-Decimal(str(unit))*(seans_sayisi-1)) if index==seans_sayisi-1 else unit
+        rate=float(row.get('prim_orani') or 0)
+        if not math.isfinite(rate) or not 0<=rate<=1:raise ValueError('Seansın kayıtlı terapist payı geçersiz.')
+        therapist=money(Decimal(str(amount))*Decimal(str(rate)))
+        clinic=money(Decimal(str(amount))-Decimal(str(therapist)))
+        linked=c.execute('SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE seans_id=?',(row['id'],)).fetchone()[0]
+        if linked>amount+.005:raise ValueError('Paket hesabı güncellenemedi; bağlı seans tahsilatı yeni seans tutarını aşıyor.')
+        c.execute('UPDATE seanslar SET ucret=?,terapist_payi=?,isletme_payi=?,anlasilan_ucret=? WHERE id=?',(amount,therapist,clinic,amount,row['id']))
+        _sync_paid(c,row['id'])
+
 def paket_kaydet(d):
     with transaction() as c:
         old=exists(c,'pilates_paketleri',d['id'],'Paket') if d.get('id') else {}
@@ -2784,7 +2799,9 @@ def paket_kaydet(d):
             if price<paid:raise ValueError('Önce fazla tahsilatı düzeltin; fiyat tahsilatın altına inemez.')
         vals=(did,required(v.get('ad','Pilates Paketi'),'Paket adı'),price,n,gift,start,end,group,flag(v.get('aktif',1)))
         if old:
-            c.execute('UPDATE pilates_paketleri SET danisan_id=?,ad=?,fiyat=?,seans_sayisi=?,hediye_seans=?,baslangic=?,bitis=?,grup_turu=?,aktif=?,legacy=0 WHERE id=?',vals+(old['id'],));return old['id']
+            c.execute('UPDATE pilates_paketleri SET danisan_id=?,ad=?,fiyat=?,seans_sayisi=?,hediye_seans=?,baslangic=?,bitis=?,grup_turu=?,aktif=?,legacy=0 WHERE id=?',vals+(old['id'],))
+            _paket_seanslarini_yeniden_fiyatlandir(c,old['id'],price,n)
+            return old['id']
         return c.execute('INSERT INTO pilates_paketleri(danisan_id,ad,fiyat,seans_sayisi,hediye_seans,baslangic,bitis,grup_turu,aktif) VALUES(?,?,?,?,?,?,?,?,?)',vals).lastrowid
 
 def _payment_write(c,d):
@@ -2866,9 +2883,8 @@ def seans_kaydet(d):
             if gift or not consumed:price=0.0
             elif old and old['hak_dustu'] and not old['hediye']:price=float(old['ucret'])
             else:
-                remaining=Decimal(str(p['fiyat']))-sum((Decimal(str(x['ucret'])) for x in rows),Decimal(0))
-                if remaining<0:raise ValueError('Eski paket tutarı kazanılan gelirden düşük; paket tutarını kontrol edin.')
-                price=money(remaining/(p['seans_sayisi']-paidused))
+                unit=money(Decimal(str(p['fiyat']))/p['seans_sayisi'])
+                price=money(Decimal(str(p['fiyat']))-Decimal(str(unit))*(p['seans_sayisi']-1)) if paidused==p['seans_sayisi']-1 else unit
         else:
             if h['kategori']=='pilates' and h['paket_mi'] and not old:raise ValueError('Pilates paket hizmeti için paket seçiniz.')
             keep_snapshot=bool(old and str(old.get('hizmet_id'))==str(h['id']) and group==old['grup_turu'] and ind==old['indirimli'])
