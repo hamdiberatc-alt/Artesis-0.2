@@ -8,8 +8,11 @@ vm.runInContext("state.boot=fixture.boot;state.boot.paketler=fixture.data.paketl
 (async()=>{
 fixture.boot.terapistler=[{id:1,ad:'A',soyad:'Bir',aktif:1},{id:2,ad:'B',soyad:'İki',aktif:1}];fixture.boot.hizmetler=[{id:1,terapist_id:1,terapist_ids:[1,2],terapist_adi:'A, B',alan_adi:'Ortak',kategori:'ftr',aktif:1,seans_ucreti:1000}];
 await vm.runInContext("openEditor('hizmetler',fixture.boot.hizmetler[0])",ctx);let fields=nodes.get('fields').innerHTML;assert.equal((fields.match(/name=\"service_therapists\"/g)||[]).length,2);assert.equal((fields.match(/name=\"service_therapists\" value=\"[12]\" checked/g)||[]).length,2);
-await vm.runInContext("openProgram({danisan_id:1,terapist_id:2,hizmet_id:1})",ctx);vm.runInContext("$('f-pg-package').value='';state.page='planlar';programServices(1)",ctx);assert(nodes.get('f-pg-service').innerHTML.includes('Ortak'));
+await vm.runInContext("openProgram({danisan_id:1,terapist_id:2,hizmet_id:1})",ctx);vm.runInContext("$('f-pg-package').value='';state.page='planlar';programServices(1)",ctx);assert(!nodes.get('f-pg-service').innerHTML.includes('Ortak'));
 const menu=vm.runInContext("renderList('hizmetler',fixture.boot.hizmetler)",ctx);assert(menu.includes('Yönet'));assert(menu.includes('Terapistleri seç'));
 const packages=vm.runInContext("renderList('paketler',fixture.data.paketler)",ctx);assert(packages.includes('package-delete-direct'));assert(packages.includes('Düzenle'));
-console.log('PASS: multiple selected therapists, shared service available for second therapist, management menu and package edit/delete controls.');
+vm.runInContext("state.calendarItems=[{danisan_id:1,danisan_adi:'Ayşe Test',terapist_id:3,hizmet_id:11,tarih:'2026-01-05',saat:'10:00',sure_dk:45,oda_id:1,paket_id:1,grup_turu:'grup2',kaynak:'planli'}];state.page='planlar';$('program-editor').close();boot=async()=>{};renderProgramCalendar=async()=>{}",ctx);let attendance=null;ctx.api=async(path,data)=>{attendance={path,data};return {ok:true}};await ctx.markProgramAttendance(0);assert.equal(attendance.path,'/api/save');assert.equal(attendance.data.kind,'seanslar');assert.equal(attendance.data.data.danisan_id,1);assert.equal(nodes.get('program-editor').open,false);
+assert(fs.readFileSync(require('path').join(__dirname,'../web/index.html'),'utf8').includes("btn('Geldi','p-attend'"));
+console.log('PASS: Pilates-only program service, direct attendance save without opening an editor, service management and package controls.');
 })().catch(e=>{console.error(e);process.exitCode=1});
+

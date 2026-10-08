@@ -3988,6 +3988,62 @@ def grup_detay(gid):
         return g
     finally:c.close()
 
+def grup_programi_kaydet(d):
+    """Create one shared weekly slot for every active member of a Pilates group."""
+    gid=integer(d.get('grup_id'),1);tid=integer(d.get('terapist_id'),1);hid=integer(d.get('hizmet_id'),1)
+    duration=integer(d.get('sure_dk',45),5,480);start=valid_date(d.get('baslangic'));end=valid_date(d.get('bitis'))
+    room=integer(d.get('oda_id'),1) if d.get('oda_id') else None
+    slots=d.get('slots')
+    if not isinstance(slots,list) or not 1<=len(slots)<=21:raise ValueError('1–21 gün/saat seçin.')
+    if end<start:raise ValueError('Bitiş başlangıçtan önce olamaz.')
+    selected=d.get('paketler') or {}
+    with _WRITE_LOCK:
+        c=get_db()
+        try:
+            group=exists(c,'pilates_gruplari',gid,'Pilates grubu')
+            if not group['aktif']:raise ValueError('Pilates grubu kapalı.')
+            members=q(c,"SELECT u.danisan_id,d.ad||' '||d.soyad ad FROM pilates_grup_uyeleri u JOIN danisanlar d ON d.id=u.danisan_id WHERE u.grup_id=? AND u.aktif=1 AND d.aktif=1 ORDER BY d.ad,d.soyad,d.id",(gid,))
+            if not members or len(members)>group['kapasite']:raise ValueError('Grubun aktif üyelerini ve kapasitesini kontrol edin.')
+            if not exists(c,'terapistler',tid,'Terapist')['aktif']:raise ValueError('Terapist pasif.')
+            h=exists(c,'hizmet_alanlari',hid,'Hizmet')
+            if not h['aktif'] or h['kategori']!='pilates':raise ValueError('Grup programında yalnızca aktif Pilates hizmeti kullanılabilir.')
+            if not service_allows(c,hid,tid):raise ValueError('Seçilen terapist bu hizmete atanmamış.')
+            if room:
+                room_row=exists(c,'odalar',room,'Oda')
+                if not room_row['aktif']:raise ValueError('Oda pasif.')
+                if room_row['kapasite']<len(members):raise ValueError('Seçilen odanın kapasitesi aktif grup üyesi sayısından küçük.')
+            packages=[]
+            for member in members:
+                raw=selected.get(str(member['danisan_id']),selected.get(member['danisan_id']))
+                if not raw:raise ValueError(member['ad']+' için grup paketi seçin.')
+                package=exists(c,'pilates_paketleri',integer(raw,1),'Pilates paketi')
+                if package['danisan_id']!=member['danisan_id'] or package.get('grup_id')!=gid or package['grup_turu']!='grup'+str(group['kapasite']) or not package['aktif']:
+                    raise ValueError(member['ad']+' için bu gruba bağlı, aktif ve kapasitesi uygun paket seçin.')
+                if start<package['baslangic'] or end>package['bitis']:raise ValueError(member['ad']+' paketinin tarih aralığı program dönemini kapsamıyor.')
+                packages.append((member,package))
+        finally:c.close()
+        cleaned=[]
+        for slot in slots:
+            day=integer(slot.get('gun_index'),0,6);time=valid_time(slot.get('saat'))
+            if _saat_dakika(time)+duration>1440:raise ValueError('Seans gece yarısını aşamaz.')
+            if any(s['gun_index']==day and _aralik_cakisiyor(time,duration,s['saat'],duration) for s in cleaned):raise ValueError('Seçtiğiniz gün/saatler birbirleriyle çakışıyor.')
+            cleaned.append({'gun_index':day,'saat':time})
+        warnings=[]
+        for member,package in packages:
+            for slot in cleaned:
+                candidate={'danisan_id':member['danisan_id'],'terapist_id':tid,'hizmet_id':hid,'oda_id':room,'sure_dk':duration,'saat':slot['saat'],'gun_index':slot['gun_index'],'baslangic':start,'bitis':end,'grup_turu':package['grup_turu'],'paket_id':package['id'],'program_id':secrets.token_hex(16)}
+                warnings.extend(schedule_conflicts('planlar',candidate)['items'])
+        warnings=list({(x['kaynak'],str(x['id'])):x for x in warnings}.values())
+        if warnings and not flag(d.get('conflict_override')):return {'saved':False,'conflicts':warnings}
+        with transaction() as c:
+            for member,package in packages:
+                program=secrets.token_hex(16)
+                for slot in cleaned:
+                    c.execute('''INSERT INTO haftalik_program_sablonlari(danisan_id,terapist_id,hizmet_id,gun_index,saat,sure_dk,oda_id,aktif,notlar,grup_turu,program_id,paket_id,baslangic,bitis) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)''',(member['danisan_id'],tid,hid,slot['gun_index'],slot['saat'],duration,room,str(d.get('notlar') or ''),package['grup_turu'],program,package['id'],start,end))
+                c.execute("INSERT OR IGNORE INTO danisan_terapistler VALUES(?,?,'ek')",(member['danisan_id'],tid))
+                c.execute('INSERT OR IGNORE INTO pilates_uyeleri VALUES(?,?)',(member['danisan_id'],date.today().isoformat()))
+        return {'saved':True,'group_id':gid,'members':len(packages),'slots':len(cleaned)}
+
 _PACKAGE_311=paket_kaydet
 
 def paket_kaydet(d):
@@ -4169,6 +4225,11 @@ def build_html():
     """Load the interface independently of the current working directory."""
     from pathlib import Path
     return (Path(__file__).resolve().parent / "web" / "index.html").read_text(encoding="utf-8")
+
+_SAVE_PILATES_GROUP=_save_kind
+def _save_kind(kind,d):
+    if kind=='grup_programi':return grup_programi_kaydet(d)
+    return _SAVE_PILATES_GROUP(kind,d)
 
 def read_report_blob(record):
     if not os.path.isfile(record['dosya_yolu']): return None

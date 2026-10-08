@@ -34,6 +34,22 @@ class PilatesTest(AppTest):
  def test_plan_conversion(self):
   pid=self.package();sid=self.call('haftalik_program_kaydet',{'danisan_id':self.a,'terapist_id':3,'hizmet_id':11,'gun_index':0,'saat':'10:00','sure_dk':45})
   r=self.program(pid,source_plan_id=sid);self.assertTrue(r['saved']);self.assertEqual(len(self.call('haftalik_program_sablonlari_listesi')),3)
+ def test_group_program_schedules_all_members_atomically(self):
+  end=(date.today()+timedelta(days=30)).isoformat()
+  pa=self.call('paket_kaydet',{'danisan_id':self.a,'ad':'Grup A','fiyat':4000,'seans_sayisi':8,'hediye_seans':0,'grup_turu':'grup2','baslangic':self.today,'bitis':end})
+  pb=self.call('paket_kaydet',{'danisan_id':self.b,'ad':'Grup B','fiyat':4000,'seans_sayisi':8,'hediye_seans':0,'grup_turu':'grup2','baslangic':self.today,'bitis':end})
+  gid=self.call('grup_kaydet',{'ad':'Akşam Pilates','kapasite':2,'uyeler':[{'danisan_id':self.a,'paket_id':pa},{'danisan_id':self.b,'paket_id':pb}]})
+  room=self.call('odalar_listesi')[0]
+  with self.call('transaction') as c:c.execute('UPDATE odalar SET kapasite=2 WHERE id=?',(room['id'],))
+  slots=[{'gun_index':date.today().weekday(),'saat':'18:00'}]
+  common={'grup_id':gid,'terapist_id':3,'hizmet_id':11,'oda_id':room['id'],'sure_dk':45,'baslangic':self.today,'bitis':end,'slots':slots}
+  with self.assertRaises(ValueError):self.call('_save_kind','grup_programi',{**common,'paketler':{str(self.a):pa}})
+  self.assertEqual(len(self.rows('SELECT * FROM haftalik_program_sablonlari')),0)
+  result=self.call('_save_kind','grup_programi',{**common,'paketler':{str(self.a):pa,str(self.b):pb}})
+  self.assertEqual((result['saved'],result['members'],result['slots']),(True,2,1))
+  plans=self.rows('SELECT danisan_id,gun_index,saat,paket_id FROM haftalik_program_sablonlari ORDER BY danisan_id')
+  self.assertEqual([(x['danisan_id'],x['saat']) for x in plans],[(self.a,'18:00'),(self.b,'18:00')])
 
 def load_tests(loader, tests, pattern):
  return unittest.TestSuite(PilatesTest(name) for name in PilatesTest.__dict__ if name.startswith("test_"))
+
