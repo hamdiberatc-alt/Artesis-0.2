@@ -30,8 +30,17 @@ class AppTest(unittest.TestCase):
   rows=self.rows('SELECT * FROM seanslar ORDER BY id');self.assertEqual([r['ucret'] for r in rows],[500.5,500.5,0]);self.assertEqual(rows[-1]['hediye'],1);self.assertEqual(self.call('paketler_listesi')[0]['kalan'],0)
   with self.assertRaises(ValueError):self.sess(terapist_id=3,hizmet_id=11,saat='15:00',paket_id=pid)
   r=self.call('gelir_raporu',self.today,self.today);self.assertEqual(r['toplam']['brut'],1001);self.assertEqual(r['toplam']['terapist_payi'],400.4);self.assertEqual(r['haftalik'][0]['brut'],r['aylik'][0]['brut'])
+ def test_package_edit_reprices_sessions_from_total_paid_rights(self):
+  pid=self.package(8,0,5800)
+  for i in range(3):self.sess(terapist_id=3,hizmet_id=11,saat=f'{9+i:02d}:30',paket_id=pid)
+  self.call('paket_kaydet',{'id':pid,'fiyat':5800,'seans_sayisi':10,'hediye_seans':0})
+  rows=self.rows('SELECT ucret,terapist_payi,isletme_payi FROM seanslar ORDER BY id')
+  self.assertEqual([x['ucret'] for x in rows],[580,580,580])
+  self.assertEqual([x['terapist_payi'] for x in rows],[232,232,232])
+  self.assertEqual([x['isletme_payi'] for x in rows],[348,348,348])
+  self.assertEqual(self.call('gelir_raporu',self.today,self.today)['toplam']['brut'],1740)
  def test_package_edit_remaining(self):
-  pid=self.package(2,1,1000);s=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid);self.call('paket_kaydet',{'id':pid,'fiyat':1400,'seans_sayisi':3,'hediye_seans':2});self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='10:00');r=self.rows('SELECT ucret FROM seanslar ORDER BY id');self.assertEqual([x['ucret'] for x in r],[500,450]);self.assertEqual(self.call('paketler_listesi')[0]['hediye_seans'],2)
+  pid=self.package(2,1,1000);s=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid);self.call('paket_kaydet',{'id':pid,'fiyat':1400,'seans_sayisi':3,'hediye_seans':2});self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='10:00');r=self.rows('SELECT ucret FROM seanslar ORDER BY id');self.assertEqual([x['ucret'] for x in r],[466.67,466.67]);self.assertEqual(self.call('paketler_listesi')[0]['hediye_seans'],2)
  def test_payment_and_cash(self):
   s=self.sess(ucret_alindi=1);self.assertEqual(len(self.call('odemeler_listesi')),1);self.assertEqual(len(self.call('kasa_listesi')),1);self.assertEqual(self.call('seans_detay',s)['ucret_alindi'],1);o=self.call('odemeler_listesi')[0];self.call('odeme_sil',o['id']);self.assertEqual(self.call('kasa_listesi'),[]);self.assertEqual(self.call('seans_detay',s)['ucret_alindi'],0)
  def test_identical_payments(self):
