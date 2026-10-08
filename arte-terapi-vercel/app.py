@@ -4044,6 +4044,39 @@ def grup_programi_kaydet(d):
                 c.execute('INSERT OR IGNORE INTO pilates_uyeleri VALUES(?,?)',(member['danisan_id'],date.today().isoformat()))
         return {'saved':True,'group_id':gid,'members':len(packages),'slots':len(cleaned)}
 
+def grup_katilim_kaydet(d):
+    """Record a shared Pilates class for every listed member in one transaction."""
+    entries=d.get('uyeler')
+    if not isinstance(entries,list) or not 1<=len(entries)<=3:raise ValueError('Grup katılımında 1–3 üye olmalıdır.')
+    dt=valid_date(d.get('tarih'));records=[]
+    for entry in entries:
+        ident=integer(entry.get('id'),1)
+        if entry.get('kaynak')=='planli':
+            c=get_db()
+            try:r=exists(c,'haftalik_program_sablonlari',ident,'Haftalık program')
+            finally:c.close()
+            if not r['aktif'] or date.fromisoformat(dt).weekday()!=r['gun_index']:raise ValueError('Grup programı bu tarihte etkin değil.')
+            if r.get('baslangic') and dt<r['baslangic'] or r.get('bitis') and dt>r['bitis']:raise ValueError('Grup programı bu tarihte etkin değil.')
+            record={k:v for k,v in r.items() if k!='id'}
+            record.update({'tarih':dt,'plan_tarihi':dt,'planlanan_saat':r['saat'],'gelmedi':0,'hak_dustu':0,'hediye':0,'tip':'normal','conflict_override':1})
+        elif entry.get('kaynak')=='gerceklesen':
+            c=get_db()
+            try:r=exists(c,'seanslar',ident,'Seans')
+            finally:c.close()
+            if r['tarih']!=dt or not r['gelmedi']:raise ValueError('Yalnızca aynı grup saatindeki gelinmeyen üyeler güncellenebilir.')
+            record={**r,'gelmedi':0,'gelmedi_nedeni':'','hak_dustu':1,'conflict_override':1}
+        else:raise ValueError('Grup üye kaynağı geçersiz.')
+        records.append(record)
+    first=records[0];group=first.get('grup_turu','bireysel')
+    if group not in ('grup2','grup3') or len(records)>int(group[-1]):raise ValueError('Grup kapasitesiyle üye sayısı eşleşmiyor.')
+    signature=lambda r:(r.get('terapist_id'),r.get('hizmet_id'),r.get('tarih'),r.get('saat'),r.get('sure_dk'),r.get('oda_id'),r.get('grup_turu'))
+    if any(signature(r)!=signature(first) for r in records):raise ValueError('Üyeler aynı grup seansında değil.')
+    if len({r['danisan_id'] for r in records})!=len(records):raise ValueError('Aynı üye grup işleminde birden fazla kez seçildi.')
+    saved=[]
+    with atomic_registration():
+        for r in records:saved.append(_save_kind('seanslar',r))
+    return {'ids':saved,'members':len(saved)}
+
 _PACKAGE_311=paket_kaydet
 
 def paket_kaydet(d):
@@ -4229,6 +4262,7 @@ def build_html():
 _SAVE_PILATES_GROUP=_save_kind
 def _save_kind(kind,d):
     if kind=='grup_programi':return grup_programi_kaydet(d)
+    if kind=='grup_katilim':return grup_katilim_kaydet(d)
     return _SAVE_PILATES_GROUP(kind,d)
 
 def read_report_blob(record):
