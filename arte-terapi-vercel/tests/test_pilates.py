@@ -10,6 +10,9 @@ class PilatesTest(AppTest):
   week=self.call('seans_haftalik_programi',(date.today()+timedelta(days=7)).isoformat());self.assertEqual(len(week['items']),3);self.assertTrue(all(x['paket_id']==pid for x in week['items']))
   self.assertEqual(self.call('seans_haftalik_programi',(date.today()+timedelta(days=50)).isoformat())['items'],[])
   self.assertEqual(self.call('seans_haftalik_programi',(date.today()-timedelta(days=10)).isoformat())['items'],[])
+ def test_weekly_calendar_filters_programs_outside_requested_dates(self):
+  pid=self.package();start=(date.today()+timedelta(days=90)).isoformat();end=(date.today()+timedelta(days=120)).isoformat();self.call('paket_kaydet',{'id':pid,'bitis':end});self.program(pid,baslangic=start,bitis=end)
+  self.assertEqual(self.call('haftalik_program_sablonlari_listesi',None,self.today,(date.today()+timedelta(days=6)).isoformat()),[])
  def test_edit_stop_program_preserves_actual(self):
   pid=self.package();r=self.program(pid);actual=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid)
   v=self.program(pid,program_id=r['program_id'],slots=[{'gun_index':1,'saat':'15:30'}]);self.assertTrue(v['saved']);self.assertEqual(len(self.call('haftalik_program_sablonlari_listesi')),1)
