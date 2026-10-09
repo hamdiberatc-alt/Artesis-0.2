@@ -2989,7 +2989,7 @@ def seans_haftalik_programi(week_start=None,terapist_id=None):
         for r in q(c,"SELECT * FROM randevular WHERE durum='iptal' AND tarih BETWEEN ? AND ?",(mon.isoformat(),sun.isoformat())):keys.add((r['tarih'],r['danisan_id'],r['terapist_id'],r['saat']))
         rows=[r for r in rows if mon.isoformat()<=r['tarih']<=sun.isoformat()]
         for r in rows:r['kaynak']='gerceklesen'
-        plans=haftalik_program_sablonlari_listesi(terapist_id)
+        plans=haftalik_program_sablonlari_listesi(terapist_id,mon.isoformat(),sun.isoformat())
         for p in plans:
             dt=(mon+timedelta(days=p['gun_index'])).isoformat()
             if (not p.get('baslangic') or dt>=p['baslangic']) and (not p.get('bitis') or dt<=p['bitis']) and (dt,p['danisan_id'],p['terapist_id'],p['saat']) not in keys:rows.append({**p,'tarih':dt,'kaynak':'planli','tip':'normal'})
@@ -2997,9 +2997,15 @@ def seans_haftalik_programi(week_start=None,terapist_id=None):
         return {'week_start':mon.isoformat(),'week_end':sun.isoformat(),'days':days,'items':rows,'hours':hours}
     finally:c.close()
 
-def haftalik_program_sablonlari_listesi(terapist_id=None):
+def haftalik_program_sablonlari_listesi(terapist_id=None,start=None,end=None):
     c=get_db()
-    try:return q(c,'''SELECT p.*,d.ad||' '||d.soyad danisan_adi,d.pilates_paket_odendi eski_odendi,t.ad terapist_adi,h.alan_adi hizmet_adi,o.ad oda_adi FROM haftalik_program_sablonlari p JOIN danisanlar d ON d.id=p.danisan_id JOIN terapistler t ON t.id=p.terapist_id LEFT JOIN hizmet_alanlari h ON h.id=p.hizmet_id LEFT JOIN odalar o ON o.id=p.oda_id WHERE p.aktif=1 AND d.aktif=1'''+(' AND p.terapist_id=?' if terapist_id else '')+' ORDER BY p.gun_index,p.saat',[terapist_id] if terapist_id else [])
+    try:
+        sql='''SELECT p.*,d.ad||' '||d.soyad danisan_adi,d.pilates_paket_odendi eski_odendi,t.ad terapist_adi,h.alan_adi hizmet_adi,o.ad oda_adi FROM haftalik_program_sablonlari p JOIN danisanlar d ON d.id=p.danisan_id JOIN terapistler t ON t.id=p.terapist_id LEFT JOIN hizmet_alanlari h ON h.id=p.hizmet_id LEFT JOIN odalar o ON o.id=p.oda_id WHERE p.aktif=1 AND d.aktif=1'''
+        params=[]
+        if terapist_id:sql+=' AND p.terapist_id=?';params.append(terapist_id)
+        if end:sql+=" AND (p.baslangic IS NULL OR p.baslangic='' OR p.baslangic<=?)";params.append(end)
+        if start:sql+=" AND (p.bitis IS NULL OR p.bitis='' OR p.bitis>=?)";params.append(start)
+        return q(c,sql+' ORDER BY p.gun_index,p.saat',params)
     finally:c.close()
 
 _PLAN_SAVE=haftalik_program_kaydet
