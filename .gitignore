@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*
+*.zip
+yedekler/
+rapor_pdfler/
+node_modules/
+test-results/
+playwright-report/

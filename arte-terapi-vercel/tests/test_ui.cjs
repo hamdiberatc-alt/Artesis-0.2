@@ -18,7 +18,7 @@ console.log('PASS: Pilates-only program service, direct attendance save without 
 
 
 const weeklyHtml=fs.readFileSync(require('path').join(__dirname,'../web/index.html'),'utf8');assert(!weeklyHtml.includes('state.boardMode'));assert(!weeklyHtml.includes('board-select'));assert(weeklyHtml.includes('Haftalık Pilates Programı'));assert(weeklyHtml.includes('8:6,10:6,16:12,20:12,24:18,32:18'));
-assert(weeklyHtml.includes('Bu hafta alınan Pilates seansı'));assert(weeklyHtml.includes("api('/api/list?kind=seanslar&ay='+encodeURIComponent(month))"));assert(weeklyHtml.includes('const countSessions=rows=>new Set(rows.filter(r=>r.kaynak!==\\'planli\\'&&!Number(r.gelmedi)).map(key)).size'));
+assert(weeklyHtml.includes('Bu hafta alınan Pilates seansı'));assert(weeklyHtml.includes("api('/api/list?kind=seanslar&ay='+encodeURIComponent(month))"));assert(weeklyHtml.includes("const countSessions=rows=>new Set(rows.filter(r=>r.kaynak!=='planli'&&!Number(r.gelmedi)).map(key)).size"));
 assert(weeklyHtml.includes("btn('Grup geldi','p-group-attend',indices)"));assert(weeklyHtml.includes("${members.length===1?("));
-assert(weeklyHtml.includes("if(state.page==='pilates')requests.push(api('/api/list?kind=pilates'))"));assert(weeklyHtml.includes("destinations={1:'planlar',2:'danisanlar',3:'pilates',4:'gelir',5:'portal',6:'ayarlar'}"));assert(weeklyHtml.includes("if(e.key==='/')"));assert(weeklyHtml.includes("state.pilatesData=await api('/api/list?kind=pilates')"));
+assert(weeklyHtml.includes("if(state.page==='pilates')requests.push(api('/api/list?kind=pilates'))"));assert(weeklyHtml.includes("maas:'Alt+7'"));assert(weeklyHtml.includes("if(e.key==='/')"));assert(weeklyHtml.includes("state.pilatesData=await api('/api/list?kind=pilates')"));
 assert(weeklyHtml.includes('packagesByClient=new Map(),plansByClient=new Map()'));assert(weeklyHtml.includes('plansByClient.get(String(m.id))'));

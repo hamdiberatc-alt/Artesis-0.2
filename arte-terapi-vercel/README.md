@@ -131,11 +131,38 @@ python app.py
 
 Turso belgelerinde etkileşimli transaction süresi 5 saniye olarak belirtilir. Veritabanını uygulamaya yakın bölgede tutun. Gerçek ağ koşullarında uzun toplu kayıtlar süre sınırına ulaşırsa işlem geri alınır; limitleri ve performansı canlı testte kontrol edin. Büyük eski veri aktarımları bu nedenle tek tek uygulama API'siyle değil sağlayıcının dump aktarımıyla yapılır.
 
-## Testler
+## Maaş hesabı ve kısayollar
+
+**Maaş Hesapla** menüsünden ayı ve terapisti seçin. **Ücreti düzenle** ile
+o ay için bireysel, ikili ve üçlü seans ücretlerini girin. Virgüllü tutarlar
+kabul edilir. Ücret girilmeyen seanslar sıfır ücretli sayılmaz; eksik olarak
+gösterilir. Ücretler aylık saklanır, diğer aylara otomatik taşınmaz.
+
+- Yalnız “Geldi” kaydedilen, bugünden ileri tarihli olmayan seanslar sayılır.
+  Hediye seanslar tamamlanan çalışma sayılır. Planlar ve gelmeyenler dışarıda kalır.
+- Varsayılan grup hesabında aynı grup, terapist, tarih, saat, hizmet, oda ve
+  süreye ait katılımlar bir derstir. İstenirse gelen katılımcı başına ücret seçilir.
+  Grup bağlantısı veya saati eksik eski kayıtlar ayrı sayılır ve kontrol uyarısı verilir.
+- Seans veya aylık ücret düzenlenirse hakediş yeniden hesaplanır. Bu bir bordro
+  veya ödeme defteri değildir; vergi, SGK, avans ve kesinti hesaplamaz.
+- Ayrıntılı seans dökümünü açabilir, CSV indirebilir ve yazdırabilirsiniz.
+  Aylık ücretler mevcut veritabanı yedeğine dahildir.
+
+Kısayollar: **Alt+1–6** mevcut bölümler, **Alt+7** maaş hesabı,
+**Alt+N** yeni haftalık program, **/** liste araması, **?** kısayol yardımı,
+**Esc** açık pencereyi kapatma. Form alanına yazarken gezinme kısayolları çalışmaz.
+Telefonda üst çubuktaki **Kısayollar** düğmesini kullanabilirsiniz.
+
+Bu güncellemede 55 geçersiz kılınmış eski fonksiyon tanımı kaldırılmıştır.
+Şema geçişleri ve eski işlevleri genişleten çağrı zincirleri korunmuştur.
+Vercel paketine `payroll.py` dosyasının da dahil edilmesi gerekir.
+
+## Testleri çalıştırma
 
 ```bash
 python -m unittest discover -s tests -v
 node tests/test_ui.cjs
+node tests/test_payroll_ui.cjs
 ```
 
 Yerel iş kuralları ve aynı kuralların bulut bağlantısı üzerinden regresyon testleri, yeniden başlayan uygulama örneğinde kalıcılık, PDF/yedekleme, yetkisiz erişim, CSRF ve rollback testleri bulunur. Bulut testleri yerel bir Hrana protokol simülatörü kullanır; gerçek Turso hesabı, gerçek Vercel dağıtımı ve mobil tarayıcı testi yerine geçmez.

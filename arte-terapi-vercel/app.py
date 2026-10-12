@@ -59,11 +59,6 @@ DB_PATH = resolve_db_path()
 PORT = 5679
 APP_VERSION = '3.5.2'
 
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
 
 def q(conn, sql, params=()):
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
@@ -87,16 +82,6 @@ def parse_iso_date(value, fallback=None):
 WEEKDAY_NAMES = ['Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi','Pazar']
 WEEKDAY_SHORT = ['Pzt','Sal','Çar','Per','Cum','Cmt','Paz']
 
-def haftalik_meta(week_start=None):
-    base = parse_iso_date(week_start, date.today())
-    monday = base - timedelta(days=base.weekday())
-    sunday = monday + timedelta(days=6)
-    days = []
-    for i in range(7):
-        dt = monday + timedelta(days=i)
-        days.append({'index': i, 'date': dt.isoformat(), 'label': dt.strftime('%d.%m'), 'day_name': WEEKDAY_SHORT[i], 'full_name': WEEKDAY_NAMES[i]})
-    hours = [f"{h:02d}:00" for h in range(8, 21)]
-    return monday, sunday, days, hours
 
 def init_db():
     conn = get_db(); c = conn.cursor()
@@ -421,18 +406,6 @@ def mesaj_sablonlari_listesi(kanal=None):
     conn.close()
     return rows
 
-def mesaj_sablon_kaydet(d):
-    conn = get_db(); c = conn.cursor()
-    if d.get('id'):
-        c.execute("UPDATE mesaj_sablonlari SET ad=?, kanal=?, konu=?, metin=?, aktif=? WHERE id=?",
-                  (d.get('ad',''), d.get('kanal','whatsapp'), d.get('konu',''), d.get('metin',''), d.get('aktif',1), d['id']))
-        lid = d['id']
-    else:
-        kod = d.get('kod') or ('user_' + datetime.now().strftime('%Y%m%d%H%M%S%f'))
-        c.execute("INSERT INTO mesaj_sablonlari(kod,ad,kanal,konu,metin,sistem,aktif) VALUES(?,?,?,?,?,?,?)",
-                  (kod, d.get('ad','Yeni Şablon'), d.get('kanal','whatsapp'), d.get('konu',''), d.get('metin',''), 0, d.get('aktif',1)))
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
 
 def mesaj_loglari_listesi(limit=120):
     conn = get_db()
@@ -564,28 +537,7 @@ def mesaj_hedefleri_listesi(tip='yarin_randevu', terapist_id=None, tarih=None, w
     return {'tip': tip, 'items': items, 'count': len(items)}
 
 # ── TERAPİST ─────────────────────────────────────────────────────────────────────
-def terapistler_listesi():
-    conn = get_db()
-    rows = q(conn, "SELECT * FROM terapistler WHERE aktif=1 ORDER BY ad")
-    conn.close(); return rows
 
-def terapist_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    c.execute("INSERT INTO terapistler(ad,soyad,renk,uzmanlik,notlar) VALUES(?,?,?,?,?)",
-              (d['ad'], d.get('soyad',''), d.get('renk','#f5b800'), d.get('uzmanlik',''), d.get('notlar','')))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
-
-def terapist_guncelle(d):
-    conn = get_db()
-    conn.execute("UPDATE terapistler SET ad=?,soyad=?,renk=?,uzmanlik=?,notlar=?,aktif=? WHERE id=?",
-                 (d['ad'], d.get('soyad',''), d.get('renk','#f5b800'), d.get('uzmanlik',''),
-                  d.get('notlar',''), d.get('aktif',1), d['id']))
-    conn.commit(); conn.close()
-
-def odalar_listesi():
-    conn = get_db()
-    rows = q(conn, "SELECT * FROM odalar WHERE aktif=1 ORDER BY ad")
-    conn.close(); return rows
 
 def _danisan_terapistleri_yaz(conn, danisan_id, primary_terapist_id, terapist_ids=None):
     ids = set()
@@ -600,40 +552,7 @@ def _danisan_terapistleri_yaz(conn, danisan_id, primary_terapist_id, terapist_id
         conn.execute("INSERT OR IGNORE INTO danisan_terapistler(danisan_id,terapist_id,rol) VALUES(?,?,?)", (danisan_id, tid, rol))
 
 # ── HİZMET ALANLARI ──────────────────────────────────────────────────────────────
-def hizmetler_listesi(terapist_id=None):
-    conn = get_db()
-    sql = """SELECT h.*, t.ad as terapist_adi FROM hizmet_alanlari h
-             LEFT JOIN terapistler t ON t.id=h.terapist_id WHERE h.aktif=1"""
-    p = []
-    if terapist_id:
-        sql += " AND h.terapist_id=?"; p.append(terapist_id)
-    rows = q(conn, sql + " ORDER BY h.terapist_id, h.alan_adi", p)
-    conn.close(); return rows
 
-def hizmet_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    seans_ucreti = d.get('seans_ucreti', d.get('bireysel_fiyat', 0) or 0)
-    c.execute("""INSERT INTO hizmet_alanlari
-        (terapist_id,alan_adi,kategori,paket_mi,paket_seans,paket_hafta,
-         seans_ucreti,bireysel_fiyat,grup2_fiyat,grup3_fiyat,terapist_prim_orani,takvim_rengi,aktif)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (d['terapist_id'], d['alan_adi'], d.get('kategori','ftr'), d.get('paket_mi',0),
-         d.get('paket_seans',1), d.get('paket_hafta',1), seans_ucreti, seans_ucreti,
-         d.get('grup2_fiyat',0), d.get('grup3_fiyat',0), d.get('terapist_prim_orani',0),
-         d.get('takvim_rengi','#3b82f6'), d.get('aktif',1)))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
-
-def hizmet_guncelle(d):
-    conn = get_db()
-    seans_ucreti = d.get('seans_ucreti', d.get('bireysel_fiyat', 0) or 0)
-    conn.execute("""UPDATE hizmet_alanlari SET terapist_id=?, alan_adi=?,kategori=?,paket_mi=?,paket_seans=?,
-        paket_hafta=?,seans_ucreti=?,bireysel_fiyat=?,grup2_fiyat=?,grup3_fiyat=?,terapist_prim_orani=?,takvim_rengi=?,aktif=?
-        WHERE id=?""",
-        (d.get('terapist_id'), d['alan_adi'], d.get('kategori','ftr'), d.get('paket_mi',0), d.get('paket_seans',1),
-         d.get('paket_hafta',1), seans_ucreti, seans_ucreti, d.get('grup2_fiyat',0),
-         d.get('grup3_fiyat',0), d.get('terapist_prim_orani',0), d.get('takvim_rengi','#3b82f6'),
-         d.get('aktif',1), d['id']))
-    conn.commit(); conn.close()
 
 # ── DANIŞAN ───────────────────────────────────────────────────────────────────────
 def danisanlar_listesi(terapist_id=None, arama=''):
@@ -676,106 +595,9 @@ def danisan_detay(did):
     d['odemeler'] = q(conn, "SELECT * FROM odemeler WHERE danisan_id=? ORDER BY tarih DESC", (did,))
     conn.close(); return d
 
-def danisan_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    c.execute("""INSERT INTO danisanlar
-        (terapist_id,ad,soyad,telefon,email,dogum_tarihi,tckn,cinsiyet,meslek,tani,sikayet,hedefler,notlar,pilates_baslangic_tarihi,pilates_paket_odendi,pilates_paket_odeme_tarihi)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (d['terapist_id'], d['ad'], d.get('soyad',''), d.get('telefon',''), d.get('email',''), d.get('dogum_tarihi',''),
-         d.get('tckn',''), d.get('cinsiyet',''), d.get('meslek',''), d.get('tani',''),
-         d.get('sikayet',''), d.get('hedefler',''), d.get('notlar',''), d.get('pilates_baslangic_tarihi',''),
-         d.get('pilates_paket_odendi',0), d.get('pilates_paket_odeme_tarihi','')))
-    conn.commit(); lid = c.lastrowid
-    _danisan_terapistleri_yaz(conn, lid, d['terapist_id'], d.get('terapist_ids') or [])
-    conn.commit(); conn.close(); return lid
-
-def danisan_guncelle(d):
-    conn = get_db()
-    conn.execute("""UPDATE danisanlar SET terapist_id=?,ad=?,soyad=?,telefon=?,email=?,dogum_tarihi=?,
-        tckn=?,cinsiyet=?,meslek=?,tani=?,sikayet=?,hedefler=?,notlar=?,aktif=?,pilates_baslangic_tarihi=? WHERE id=?""",
-        (d.get('terapist_id'), d['ad'], d.get('soyad',''), d.get('telefon',''), d.get('email',''), d.get('dogum_tarihi',''),
-         d.get('tckn',''), d.get('cinsiyet',''), d.get('meslek',''), d.get('tani',''),
-         d.get('sikayet',''), d.get('hedefler',''), d.get('notlar',''), d.get('aktif',1), d.get('pilates_baslangic_tarihi',''), d['id']))
-    _danisan_terapistleri_yaz(conn, d['id'], d.get('terapist_id'), d.get('terapist_ids') or [])
-    conn.commit(); conn.close()
-
-def danisan_sil(did):
-    conn = get_db()
-    odeme_ids = [r['id'] for r in q(conn, "SELECT id FROM odemeler WHERE danisan_id=?", (did,))]
-    conn.close()
-    for oid in odeme_ids:
-        odeme_sil(oid)
-    conn = get_db()
-    for t in ['randevular','seanslar','gelisim_notlari','danisan_raporlar']:
-        conn.execute(f"DELETE FROM {t} WHERE danisan_id=?", (did,))
-    conn.execute("DELETE FROM danisanlar WHERE id=?", (did,))
-    conn.commit(); conn.close()
 
 # ── SEANS ─────────────────────────────────────────────────────────────────────────
-def _ucret_hesapla(hizmet, grup_turu, indirimli):
-    if not hizmet: return 0.0, 0.0, 0.0
-    if hizmet.get('paket_mi'):
-        fiyat_map = {'bireysel': hizmet['seans_ucreti'] or hizmet['bireysel_fiyat'],
-                     'grup2': hizmet['grup2_fiyat'], 'grup3': hizmet['grup3_fiyat']}
-        toplam = fiyat_map.get(grup_turu, hizmet['seans_ucreti'] or 0)
-        ucret = round(toplam / (hizmet['paket_seans'] or 1), 2)
-    else:
-        if indirimli and hizmet.get('grup2_fiyat', 0) > 0:
-            ucret = hizmet['grup2_fiyat']
-        else:
-            ucret = hizmet['seans_ucreti'] or hizmet.get('bireysel_fiyat', 0) or 0
-    t_pay = round(float(ucret) * float(hizmet.get('terapist_prim_orani', 0) or 0), 2)
-    i_pay = round(float(ucret) - t_pay, 2)
-    return float(ucret), t_pay, i_pay
 
-def seans_ekle(danisan_id, terapist_id, hizmet_id, tarih, tip='normal',
-               grup_turu='bireysel', indirimli=0, soap=None, saat='', sure_dk=45, oda_id=None,
-               ucret_alindi=0, tahsilat_tarihi=''):
-    conn = get_db(); c = conn.cursor()
-    h_list = q(conn, "SELECT * FROM hizmet_alanlari WHERE id=?", (hizmet_id,)) if hizmet_id else []
-    h = h_list[0] if h_list else None
-    ucret, t_pay, i_pay = _ucret_hesapla(h, grup_turu, indirimli)
-    if soap is None:
-        soap = {}
-    elif isinstance(soap, str):
-        # Geriye dönük uyumluluk: bazı akışlar SOAP alanını düz metin gönderiyor.
-        soap = {'s': soap, 'o': '', 'a': '', 'p': ''}
-    elif not isinstance(soap, dict):
-        soap = dict(soap) if hasattr(soap, 'items') else {'s': str(soap), 'o': '', 'a': '', 'p': ''}
-    ucret_alindi = 1 if str(ucret_alindi) in ('1', 'True', 'true', 'on') or ucret_alindi is True else 0
-    tahsilat_tarihi = (tahsilat_tarihi or '').strip()
-    if ucret_alindi and not tahsilat_tarihi:
-        tahsilat_tarihi = tarih
-    if not ucret_alindi:
-        tahsilat_tarihi = ''
-    c.execute("SELECT id FROM seanslar WHERE danisan_id=? AND terapist_id=? AND tarih=? AND COALESCE(saat,'')=COALESCE(?, '')",
-              (danisan_id, terapist_id, tarih, saat))
-    mevcut = c.fetchone()
-    if mevcut:
-        c.execute("""UPDATE seanslar SET hizmet_id=?,tip=?,grup_turu=?,ucret=?,
-            terapist_payi=?,isletme_payi=?,indirimli=?,ucret_alindi=?,tahsilat_tarihi=?,
-            soap_s=?,soap_o=?,soap_a=?,soap_p=?, saat=?, sure_dk=?, oda_id=? WHERE id=?""",
-            (hizmet_id, tip, grup_turu, ucret, t_pay, i_pay, indirimli, ucret_alindi, tahsilat_tarihi,
-             soap.get('s',''), soap.get('o',''), soap.get('a',''), soap.get('p',''),
-             saat, sure_dk, oda_id, mevcut['id']))
-        lid = mevcut['id']
-    else:
-        c.execute("""INSERT INTO seanslar
-            (danisan_id,terapist_id,hizmet_id,tarih,tip,grup_turu,ucret,
-             terapist_payi,isletme_payi,indirimli,ucret_alindi,tahsilat_tarihi,
-             soap_s,soap_o,soap_a,soap_p,saat,sure_dk,oda_id)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (danisan_id, terapist_id, hizmet_id, tarih, tip, grup_turu, ucret,
-             t_pay, i_pay, indirimli, ucret_alindi, tahsilat_tarihi,
-             soap.get('s',''), soap.get('o',''), soap.get('a',''), soap.get('p',''),
-             saat, sure_dk, oda_id))
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
-
-def seans_sil(seans_id):
-    conn = get_db()
-    conn.execute("DELETE FROM seanslar WHERE id=?", (seans_id,))
-    conn.commit(); conn.close()
 
 def seans_detay(seans_id):
     conn = get_db()
@@ -791,21 +613,6 @@ def seans_detay(seans_id):
         WHERE s.id=?""", (seans_id,))
     conn.close(); return r[0] if r else None
 
-def seans_odeme_durum_guncelle(seans_id, ucret_alindi, tahsilat_tarihi=''):
-    conn = get_db()
-    row = q(conn, "SELECT tarih FROM seanslar WHERE id=?", (seans_id,))
-    if not row:
-        conn.close()
-        raise ValueError('Seans bulunamadı')
-    alindi = 1 if str(ucret_alindi) in ('1','True','true','on') or ucret_alindi is True else 0
-    tahsilat_tarihi = (tahsilat_tarihi or '').strip()
-    if alindi and not tahsilat_tarihi:
-        tahsilat_tarihi = row[0]['tarih']
-    if not alindi:
-        tahsilat_tarihi = ''
-    conn.execute("UPDATE seanslar SET ucret_alindi=?, tahsilat_tarihi=? WHERE id=?", (alindi, tahsilat_tarihi, seans_id))
-    conn.commit(); conn.close()
-    return {'ok': True}
 
 def aylik_grid(yil, ay, terapist_id):
     conn = get_db()
@@ -877,74 +684,16 @@ def aylik_grid(yil, ay, terapist_id):
 
 
 # ── GELİŞİM / RAPOR ──────────────────────────────────────────────────────────────
-def gelisim_not_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    metin = d.get('metin', d.get('icerik', ''))
-    c.execute("INSERT INTO gelisim_notlari(danisan_id,terapist_id,tarih,tur,metin) VALUES(?,?,?,?,?)",
-              (d['danisan_id'], d.get('terapist_id'), d['tarih'], d.get('tur','genel'), metin))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
 
 def gelisim_not_sil(nid):
     conn = get_db(); conn.execute("DELETE FROM gelisim_notlari WHERE id=?", (nid,)); conn.commit(); conn.close()
 
-def rapor_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    baslik = d.get('baslik', d.get('tur', 'Rapor'))
-    icerik = d.get('icerik', d.get('metin', ''))
-    c.execute("INSERT INTO danisan_raporlar(danisan_id,terapist_id,tarih,baslik,icerik) VALUES(?,?,?,?,?)",
-              (d['danisan_id'], d.get('terapist_id'), d['tarih'], baslik, icerik))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
 
 def rapor_sil(rid):
     conn = get_db(); conn.execute("DELETE FROM danisan_raporlar WHERE id=?", (rid,)); conn.commit(); conn.close()
 
 # ── ÖDEME / GİDER / KASA ─────────────────────────────────────────────────────────
-def odeme_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    c.execute("INSERT INTO odemeler(danisan_id,terapist_id,tarih,tutar,yontem,notlar) VALUES(?,?,?,?,?,?)",
-              (d['danisan_id'], d.get('terapist_id'), d['tarih'], d['tutar'], d.get('yontem','nakit'), d.get('notlar','')))
-    lid = c.lastrowid
-    dan = q(conn, "SELECT ad||' '||soyad as n FROM danisanlar WHERE id=?", (d['danisan_id'],))
-    c.execute("INSERT INTO kasa(tarih,tur,tutar,aciklama,kaynak) VALUES(?,?,?,?,?)",
-              (d['tarih'], 'giris', d['tutar'], f"Ödeme: {dan[0]['n'] if dan else ''}", 'odeme'))
-    conn.commit(); conn.close(); return lid
 
-def odeme_sil(oid):
-    conn = get_db()
-    o = q(conn, "SELECT * FROM odemeler WHERE id=?", (oid,))
-    if o:
-        kasa = q(conn, "SELECT id FROM kasa WHERE kaynak='odeme' AND tutar=? AND tarih=? ORDER BY id DESC LIMIT 1", (o[0]['tutar'], o[0]['tarih']))
-        if kasa:
-            conn.execute("DELETE FROM kasa WHERE id=?", (kasa[0]['id'],))
-    conn.execute("DELETE FROM odemeler WHERE id=?", (oid,))
-    conn.commit(); conn.close()
-
-def odemeler_listesi(ay=None, terapist_id=None, danisan_id=None):
-    conn = get_db()
-    sql = "SELECT o.*,d.ad||' '||d.soyad as danisan_adi FROM odemeler o JOIN danisanlar d ON d.id=o.danisan_id WHERE 1=1"
-    p = []
-    if ay: sql += " AND strftime('%Y-%m',o.tarih)=?"; p.append(ay)
-    if terapist_id: sql += " AND o.terapist_id=?"; p.append(terapist_id)
-    if danisan_id: sql += " AND o.danisan_id=?"; p.append(danisan_id)
-    rows = q(conn, sql+" ORDER BY o.tarih DESC", p); conn.close(); return rows
-
-def gider_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    c.execute("INSERT INTO giderler(tarih,kategori,tutar,aciklama) VALUES(?,?,?,?)",
-              (d['tarih'], d['kategori'], d['tutar'], d.get('aciklama','')))
-    lid = c.lastrowid
-    c.execute("INSERT INTO kasa(tarih,tur,tutar,aciklama,kaynak) VALUES(?,?,?,?,?)",
-              (d['tarih'], 'cikis', d['tutar'], d.get('aciklama', d['kategori']), 'gider'))
-    conn.commit(); conn.close(); return lid
-
-def gider_sil(gid):
-    conn = get_db()
-    g = q(conn, "SELECT * FROM giderler WHERE id=?", (gid,))
-    if g:
-        kasa = q(conn, "SELECT id FROM kasa WHERE kaynak='gider' AND tutar=? AND tarih=? ORDER BY id DESC LIMIT 1", (g[0]['tutar'], g[0]['tarih']))
-        if kasa:
-            conn.execute("DELETE FROM kasa WHERE id=?", (kasa[0]['id'],))
-    conn.execute("DELETE FROM giderler WHERE id=?", (gid,)); conn.commit(); conn.close()
 
 def giderler_listesi(ay=None):
     conn = get_db()
@@ -958,17 +707,6 @@ def kasa_listesi(ay=None):
     if ay: sql += " AND strftime('%Y-%m',tarih)=?"; p.append(ay)
     rows = q(conn, sql+" ORDER BY tarih DESC", p); conn.close(); return rows
 
-def kasa_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    tur = d.get('tur', d.get('tip'))
-    if not tur:
-        raise ValueError('Kasa türü zorunludur')
-    c.execute("INSERT INTO kasa(tarih,tur,tutar,aciklama,kaynak) VALUES(?,?,?,?,?)",
-              (d['tarih'], tur, d['tutar'], d.get('aciklama',''), 'manuel'))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
-
-def kasa_sil(kid):
-    conn = get_db(); conn.execute("DELETE FROM kasa WHERE id=?", (kid,)); conn.commit(); conn.close()
 
 # ── RAPORLAR ──────────────────────────────────────────────────────────────────────
 def gelir_ozet(ay=None, terapist_id=None):
@@ -1017,21 +755,6 @@ def randevular_listesi(tarih=None, ay=None, terapist_id=None):
     rows = q(conn, sql+" ORDER BY r.tarih, r.saat", p)
     conn.close(); return rows
 
-def randevu_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    c.execute("""INSERT INTO randevular(danisan_id,terapist_id,hizmet_id,tarih,saat,sure_dk,durum,notlar,oda_id)
-                 VALUES(?,?,?,?,?,?,?,?,?)""",
-              (d['danisan_id'], d['terapist_id'], d.get('hizmet_id'),
-               d['tarih'], d['saat'], d.get('sure_dk',45), d.get('durum','bekliyor'), d.get('notlar',''), d.get('oda_id')))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
-
-def randevu_guncelle(d):
-    conn = get_db()
-    conn.execute("""UPDATE randevular SET danisan_id=?, terapist_id=?, hizmet_id=?, tarih=?, saat=?,
-        sure_dk=?, durum=?, notlar=?, oda_id=? WHERE id=?""",
-        (d['danisan_id'], d['terapist_id'], d.get('hizmet_id'), d['tarih'], d['saat'],
-         d.get('sure_dk',45), d.get('durum','bekliyor'), d.get('notlar',''), d.get('oda_id'), d['id']))
-    conn.commit(); conn.close()
 
 def randevu_sil(rid):
     conn = get_db(); conn.execute("DELETE FROM randevular WHERE id=?", (rid,)); conn.commit(); conn.close()
@@ -1180,27 +903,6 @@ def haftalik_program_sil(pid):
     conn.execute("DELETE FROM haftalik_program_sablonlari WHERE id=?", (pid,))
     conn.commit(); conn.close()
 
-def haftalik_program_sablonlari_listesi(terapist_id=None):
-    conn = get_db()
-    sql = """SELECT ws.*,
-        d.ad||' '||d.soyad as danisan_adi,
-        t.ad as randevu_terapist_adi,
-        h.alan_adi as hizmet_adi,
-        h.takvim_rengi as takvim_rengi,
-        o.ad as oda_adi
-        FROM haftalik_program_sablonlari ws
-        JOIN danisanlar d ON d.id=ws.danisan_id
-        LEFT JOIN terapistler t ON t.id=ws.terapist_id
-        LEFT JOIN hizmet_alanlari h ON h.id=ws.hizmet_id
-        LEFT JOIN odalar o ON o.id=ws.oda_id
-        WHERE COALESCE(ws.aktif,1)=1"""
-    p = []
-    if terapist_id:
-        sql += " AND (ws.terapist_id=? OR EXISTS (SELECT 1 FROM danisan_terapistler dt WHERE dt.danisan_id=ws.danisan_id AND dt.terapist_id=?))"
-        p.extend([terapist_id, terapist_id])
-    rows = q(conn, sql + " ORDER BY ws.gun_index, COALESCE(ws.saat,''), d.ad, d.soyad", p)
-    conn.close()
-    return rows
 
 def haftalik_program_terapist_programi(week_start=None, terapist_id=None):
     if terapist_id in (None, '', 0, '0'):
@@ -1258,55 +960,6 @@ def haftalik_oda_programi(week_start=None, oda_id=None):
             items.append(row)
     conn.close()
     return {'week_start': monday.isoformat(), 'week_end': sunday.isoformat(), 'days': days, 'items': items, 'hours': hours, 'odalar': odalar, 'oda_id': oda_id}
-
-
-def seans_haftalik_programi(week_start=None, terapist_id=None):
-    conn = get_db()
-    if terapist_id in (None, '', 0, '0'):
-        terapistler = terapistler_listesi()
-        terapist_id = terapistler[0]['id'] if terapistler else None
-    monday, sunday, days, hours = haftalik_meta(week_start)
-    if not terapist_id:
-        conn.close()
-        return {'week_start': monday.isoformat(), 'week_end': sunday.isoformat(), 'days': days, 'items': [], 'hours': hours}
-    actual = q(conn, """SELECT s.*,
-        d.ad||' '||d.soyad as danisan_adi,
-        t.ad as terapist_adi, t.renk as terapist_renk,
-        h.alan_adi as hizmet_adi, h.takvim_rengi as takvim_rengi,
-        o.ad as oda_adi, o.renk as oda_renk
-        FROM seanslar s
-        JOIN danisanlar d ON d.id=s.danisan_id
-        LEFT JOIN terapistler t ON t.id=s.terapist_id
-        LEFT JOIN hizmet_alanlari h ON h.id=s.hizmet_id
-        LEFT JOIN odalar o ON o.id=s.oda_id
-        WHERE s.tarih BETWEEN ? AND ?
-          AND (s.terapist_id=? OR EXISTS (SELECT 1 FROM danisan_terapistler dt WHERE dt.danisan_id=s.danisan_id AND dt.terapist_id=?))
-        ORDER BY s.tarih, COALESCE(s.saat,''), d.ad, d.soyad""", (monday.isoformat(), sunday.isoformat(), terapist_id, terapist_id))
-    planned = haftalik_program_sablonlari_listesi(terapist_id)
-    actual_keys = set()
-    items = []
-    for row in actual:
-        dt = parse_iso_date(row['tarih'], monday)
-        item = dict(row)
-        item['day_index'] = dt.weekday()
-        item['kaynak'] = 'gerceklesen'
-        items.append(item)
-        actual_keys.add((row['tarih'], str(row['danisan_id']), (row.get('saat') or '')[:5]))
-    for pr in planned:
-        day_idx = int(pr.get('gun_index') or 0)
-        item_date = monday + timedelta(days=day_idx)
-        key = (item_date.isoformat(), str(pr['danisan_id']), (pr.get('saat') or '')[:5])
-        if key in actual_keys:
-            continue
-        row = dict(pr)
-        row['tarih'] = item_date.isoformat()
-        row['day_index'] = day_idx
-        row['kaynak'] = 'planli'
-        row['tip'] = 'planli'
-        items.append(row)
-    conn.close()
-    items.sort(key=lambda x: (x.get('tarih') or '', x.get('saat') or '', x.get('danisan_adi') or ''))
-    return {'week_start': monday.isoformat(), 'week_end': sunday.isoformat(), 'days': days, 'items': items, 'hours': hours}
 
 
 # ── AYLIK KARŞILAŞTIRMA ──────────────────────────────────────────────────────────
@@ -1392,7 +1045,6 @@ def odeme_ozet(ay=None, terapist_id=None):
         'tahsil_edilen': float(odemeler),
         'terapist_kazanc': terapist_kazanc
     }
-
 
 
 def terapist_pay_ozet(ay=None, terapist_id=None):
@@ -1572,7 +1224,6 @@ TEMA_RENKLERI = {
 }
 
 
-
 # ── v3.5.0 EK MODÜLLERİ ────────────────────────────────────────────────────────────
 import secrets
 
@@ -1725,33 +1376,8 @@ def kaynaklar_listesi(tur=None):
     conn.close(); return rows
 
 
-def kaynak_kaydet(d):
-    init_db()
-    conn = get_db(); c = conn.cursor()
-    vals = (d.get('ad','').strip(), d.get('tur','ekipman'), d.get('renk','#0ea5e9'), d.get('kapasite',1), d.get('bagli_oda_id') or None, d.get('aktif',1), d.get('notlar',''))
-    if d.get('id'):
-        c.execute("UPDATE kaynaklar SET ad=?,tur=?,renk=?,kapasite=?,bagli_oda_id=?,aktif=?,notlar=? WHERE id=?", vals + (d['id'],))
-        lid = d['id']
-    else:
-        c.execute("INSERT INTO kaynaklar(ad,tur,renk,kapasite,bagli_oda_id,aktif,notlar) VALUES(?,?,?,?,?,?,?)", vals)
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
-
-
 def kaynak_sil(kid):
     conn = get_db(); conn.execute("DELETE FROM kaynaklar WHERE id=?", (kid,)); conn.commit(); conn.close()
-
-
-def kaynak_rezervasyon_kaydet(d):
-    conn = get_db(); c = conn.cursor()
-    vals = (d['kaynak_id'], d['tarih'], d['saat'], d.get('sure_dk',45), d.get('baslik','Blok'), d.get('tip','manuel'), d.get('danisan_id'), d.get('terapist_id'), json.dumps(d.get('meta',{}), ensure_ascii=False))
-    if d.get('id'):
-        c.execute("UPDATE kaynak_rezervasyonlari SET kaynak_id=?,tarih=?,saat=?,sure_dk=?,baslik=?,tip=?,danisan_id=?,terapist_id=?,meta_json=? WHERE id=?", vals + (d['id'],))
-        lid = d['id']
-    else:
-        c.execute("INSERT INTO kaynak_rezervasyonlari(kaynak_id,tarih,saat,sure_dk,baslik,tip,danisan_id,terapist_id,meta_json) VALUES(?,?,?,?,?,?,?,?,?)", vals)
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
 
 
 def kaynak_rezervasyon_sil(rid):
@@ -1805,78 +1431,6 @@ def stok_kalemleri_listesi():
     conn.close(); return {'items': items, 'hareketler': hareketler, 'kritik_sayi': sum(1 for x in items if x.get('kritik'))}
 
 
-def stok_kalem_kaydet(d):
-    conn = get_db(); c = conn.cursor()
-    vals = (d.get('ad','').strip(), d.get('kategori','Sarf'), d.get('birim','adet'), float(d.get('mevcut_stok',0) or 0), float(d.get('min_stok',0) or 0), float(d.get('birim_maliyet',0) or 0), d.get('barkod',''), d.get('aktif',1), d.get('notlar',''))
-    if d.get('id'):
-        c.execute("UPDATE stok_kalemleri SET ad=?,kategori=?,birim=?,mevcut_stok=?,min_stok=?,birim_maliyet=?,barkod=?,aktif=?,notlar=? WHERE id=?", vals + (d['id'],))
-        lid = d['id']
-    else:
-        c.execute("INSERT INTO stok_kalemleri(ad,kategori,birim,mevcut_stok,min_stok,birim_maliyet,barkod,aktif,notlar) VALUES(?,?,?,?,?,?,?,?,?)", vals)
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
-
-
-def stok_hareket_ekle(d):
-    conn = get_db(); c = conn.cursor()
-    kalem = q(conn, "SELECT * FROM stok_kalemleri WHERE id=?", (d['kalem_id'],))
-    if not kalem:
-        conn.close(); raise ValueError('Stok kalemi bulunamadı')
-    kalem = kalem[0]
-    miktar = float(d.get('miktar',0) or 0)
-    tur = d.get('tur','giris')
-    mevcut = float(kalem.get('mevcut_stok') or 0)
-    if tur == 'giris': yeni = mevcut + miktar
-    elif tur == 'cikis': yeni = mevcut - miktar
-    else: yeni = miktar
-    c.execute("INSERT INTO stok_hareketleri(kalem_id,tarih,tur,miktar,birim_fiyat,aciklama) VALUES(?,?,?,?,?,?)", (d['kalem_id'], d.get('tarih') or date.today().isoformat(), tur, miktar, float(d.get('birim_fiyat',0) or 0), d.get('aciklama','')))
-    c.execute("UPDATE stok_kalemleri SET mevcut_stok=?, birim_maliyet=COALESCE(NULLIF(?,0), birim_maliyet) WHERE id=?", (yeni, float(d.get('birim_fiyat',0) or 0), d['kalem_id']))
-    conn.commit(); conn.close(); return {'ok': True, 'mevcut_stok': yeni}
-
-
-def recall_hedefleri(gun_esik=21, terapist_id=None):
-    conn = get_db(); klinik = ayar_al('klinik_adi', 'Arte Terapi')
-    sql = """SELECT d.id as danisan_id, d.ad, d.soyad, d.telefon, COALESCE(d.email,'') as email, t.ad as terapist_adi,
-        MAX(date(s.tarih)) as son_seans
-        FROM danisanlar d
-        LEFT JOIN seanslar s ON s.danisan_id=d.id
-        LEFT JOIN terapistler t ON t.id=d.terapist_id
-        WHERE d.aktif=1"""
-    p = []
-    if terapist_id:
-        sql += " AND d.terapist_id=?"; p.append(terapist_id)
-    sql += " GROUP BY d.id HAVING son_seans IS NOT NULL AND julianday(date('now','localtime')) - julianday(date(son_seans)) >= ? ORDER BY son_seans"
-    p.append(int(gun_esik or 21))
-    rows = q(conn, sql, p); conn.close(); items = []
-    for r in rows:
-        gecen = int((date.today() - parse_iso_date(r.get('son_seans'))).days)
-        items.append({'kaynak':'recall','kaynak_id':r['danisan_id'],'danisan_id':r['danisan_id'],'ad':r['ad'],'soyad':r.get('soyad',''),'danisan_adi':((r['ad'] or '')+' '+(r.get('soyad') or '')).strip(),'telefon':r.get('telefon',''),'email':r.get('email',''),'telefon_norm':_turkiye_tel_normalize(r.get('telefon')),'terapist_adi':r.get('terapist_adi',''),'gecen_gun':gecen,'klinik':klinik})
-    return items
-
-
-def odeme_hatirlatma_hedefleri(gun_esik=3, terapist_id=None):
-    conn = get_db(); klinik = ayar_al('klinik_adi', 'Arte Terapi')
-    sql = """SELECT d.id as danisan_id, d.ad, d.soyad, d.telefon, COALESCE(d.email,'') as email, t.ad as terapist_adi,
-        SUM(CASE WHEN s.ucret_alindi=0 THEN COALESCE(s.ucret,0) ELSE 0 END) as borc_tutar,
-        MIN(CASE WHEN s.ucret_alindi=0 THEN s.tarih END) as ilk_borc_tarihi,
-        COALESCE(d.pilates_paket_odendi,0) as pilates_paket_odendi
-        FROM danisanlar d LEFT JOIN seanslar s ON s.danisan_id=d.id LEFT JOIN terapistler t ON t.id=d.terapist_id
-        WHERE d.aktif=1"""
-    p = []
-    if terapist_id: sql += " AND d.terapist_id=?"; p.append(terapist_id)
-    sql += " GROUP BY d.id ORDER BY borc_tutar DESC"
-    rows = q(conn, sql, p); conn.close(); items=[]
-    for r in rows:
-        borc=float(r.get('borc_tutar') or 0)
-        if borc <= 0 and int(r.get('pilates_paket_odendi') or 0) == 1: continue
-        tarih = r.get('ilk_borc_tarihi') or date.today().isoformat()
-        if borc > 0:
-            gecen = (date.today() - parse_iso_date(tarih)).days
-            if gecen < int(gun_esik or 3): continue
-        items.append({'kaynak':'odeme','kaynak_id':r['danisan_id'],'danisan_id':r['danisan_id'],'ad':r['ad'],'soyad':r.get('soyad',''),'danisan_adi':((r['ad'] or '')+' '+(r.get('soyad') or '')).strip(),'telefon':r.get('telefon',''),'email':r.get('email',''),'telefon_norm':_turkiye_tel_normalize(r.get('telefon')),'terapist_adi':r.get('terapist_adi',''),'borc_tutar':f"₺{borc:,.0f}".replace(',', '.'),'klinik':klinik,'tarih':tarih})
-    return items
-
-
 _mesaj_hedefleri_listesi_v340 = mesaj_hedefleri_listesi
 
 def mesaj_hedefleri_listesi(tip='yarin_randevu', terapist_id=None, tarih=None, week_start=None):
@@ -1891,19 +1445,6 @@ def mesaj_hedefleri_listesi(tip='yarin_randevu', terapist_id=None, tarih=None, w
 
 def otomasyon_kurallari_listesi():
     init_db(); conn = get_db(); rows = q(conn, "SELECT * FROM otomasyon_kurallari ORDER BY aktif DESC, ad"); conn.close(); return rows
-
-
-def otomasyon_kural_kaydet(d):
-    conn = get_db(); c = conn.cursor()
-    ayar_json = d.get('ayar_json') if isinstance(d.get('ayar_json'), str) else json.dumps(d.get('ayar_json', {}), ensure_ascii=False)
-    if d.get('id'):
-        c.execute("UPDATE otomasyon_kurallari SET ad=?,tur=?,kanal=?,sablon_kod=?,ayar_json=?,aktif=? WHERE id=?", (d.get('ad','Kural'), d.get('tur','randevu_hatirlatma'), d.get('kanal','whatsapp'), d.get('sablon_kod',''), ayar_json, d.get('aktif',1), d['id']))
-        lid = d['id']
-    else:
-        kod = d.get('kod') or ('rule_'+datetime.now().strftime('%Y%m%d%H%M%S'))
-        c.execute("INSERT INTO otomasyon_kurallari(kod,ad,tur,kanal,sablon_kod,ayar_json,aktif) VALUES(?,?,?,?,?,?,?)", (kod, d.get('ad','Kural'), d.get('tur','randevu_hatirlatma'), d.get('kanal','whatsapp'), d.get('sablon_kod',''), ayar_json, d.get('aktif',1)))
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
 
 
 def weekStartMondayPy(value=None):
@@ -1928,21 +1469,6 @@ def otomasyon_onizleme():
         hedefler = _targets_for_rule(rule)
         out.append({'kural': rule, 'adet': len(hedefler), 'ornekler': hedefler[:5]})
     return out
-
-
-def otomasyon_calistir():
-    rules = [r for r in otomasyon_kurallari_listesi() if int(r.get('aktif') or 0) == 1]
-    tpl_map = {r['kod']: r for r in mesaj_sablonlari_listesi()}
-    kayitlar=[]; now = datetime.now().isoformat(timespec='seconds')
-    for rule in rules:
-        tpl = tpl_map.get(rule.get('sablon_kod'))
-        if not tpl: continue
-        for x in _targets_for_rule(rule):
-            kayitlar.append({'tarih': now, 'kanal': rule.get('kanal','whatsapp'), 'hedef_turu': rule.get('tur',''), 'hedef_id': x.get('danisan_id') or x.get('kaynak_id'), 'hedef_ad': x.get('danisan_adi') or x.get('ad',''), 'hedef_iletisim': x.get('email') if rule.get('kanal')=='email' else x.get('telefon',''), 'konu': tpl.get('konu',''), 'metin': tpl.get('metin',''), 'durum':'otomatik_hazirlandi', 'meta': x})
-        conn = get_db(); conn.execute("UPDATE otomasyon_kurallari SET son_calisma=? WHERE id=?", (now, rule['id'])); conn.commit(); conn.close()
-    if kayitlar: mesaj_log_ekle({'kayitlar': kayitlar})
-    ayar_kaydet('otomasyon_son_calisma', now)
-    return {'ok': True, 'adet': len(kayitlar)}
 
 
 def portal_token_olustur(danisan_id, gecerlilik_gun=180):
@@ -1971,61 +1497,7 @@ def online_talep_guncelle(d):
     conn = get_db(); conn.execute("UPDATE online_talepler SET durum=?, notlar=? WHERE id=?", (d.get('durum','yeni'), d.get('notlar',''), d['id'])); conn.commit(); conn.close()
 
 
-def portal_veri(token):
-    conn = get_db()
-    rows = q(conn, "SELECT p.*, d.*, t.ad as terapist_adi FROM portal_erisimleri p JOIN danisanlar d ON d.id=p.danisan_id LEFT JOIN terapistler t ON t.id=d.terapist_id WHERE p.token=? AND p.aktif=1", (token,))
-    if not rows: conn.close(); return None
-    r = rows[0]
-    conn.execute("UPDATE portal_erisimleri SET son_giris=? WHERE token=?", (datetime.now().isoformat(timespec='seconds'), token))
-    rv = q(conn, "SELECT tarih,saat,durum FROM randevular WHERE danisan_id=? AND date(tarih)>=date('now','localtime') ORDER BY date(tarih), saat LIMIT 10", (r['danisan_id'],))
-    ss = q(conn, "SELECT tarih, saat, ucret, ucret_alindi FROM seanslar WHERE danisan_id=? ORDER BY date(tarih) DESC, saat DESC LIMIT 10", (r['danisan_id'],))
-    conn.commit(); conn.close(); return {'danisan': r, 'randevular': rv, 'seanslar': ss}
-
-
-def public_booking_html():
-    klinik = ayar_al('klinik_adi', 'Arte Terapi')
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{klinik} Online Talep</title><style>body{{font-family:system-ui;background:#f8fafc;padding:24px;color:#0f172a}}.card{{max-width:720px;margin:auto;background:white;border:1px solid #e2e8f0;border-radius:16px;padding:24px;box-shadow:0 10px 24px rgba(15,23,42,.06)}}input,textarea,button{{width:100%;padding:12px;border-radius:12px;border:1px solid #cbd5e1;margin-top:6px;margin-bottom:12px;box-sizing:border-box}}button{{background:#f5b800;border:0;font-weight:700;cursor:pointer}}</style></head><body><div class='card'><h2>{klinik} • Online Randevu Talebi</h2><p>Bu form istek bırakır; otomatik onaylı randevu oluşturmaz.</p><form onsubmit='return sendForm(event)'><label>Ad</label><input id='ad' required><label>Soyad</label><input id='soyad'><label>Telefon</label><input id='telefon' required><label>E-posta</label><input id='email'><label>İstenen hizmet</label><input id='hizmet_adi'><label>Tercih edilen tarih</label><input id='tercih_tarih' type='date'><label>Saat</label><input id='tercih_saat' type='time'><label>Notlar</label><textarea id='notlar'></textarea><button>Talep Gönder</button></form><div id='sonuc'></div></div><script>async function sendForm(e){{e.preventDefault();const body={{ad:ad.value,soyad:soyad.value,telefon:telefon.value,email:email.value,hizmet_adi:hizmet_adi.value,tercih_tarih:tercih_tarih.value,tercih_saat:tercih_saat.value,notlar:notlar.value}};const r=await fetch('/api/public/booking',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});const j=await r.json();document.getElementById('sonuc').innerHTML=j.ok?'Talebiniz alındı. En kısa sürede dönüş yapacağız.':'Hata: '+(j.error||'Bilinmiyor');}}</script></body></html>"""
-
-
-def public_portal_html(token):
-    klinik = ayar_al('klinik_adi', 'Arte Terapi')
-    veri = portal_veri(token)
-    if not veri: return "<html><body><h3>Geçersiz portal bağlantısı</h3></body></html>"
-    d = veri['danisan']
-    upcoming = ''.join([f"<li>{x['tarih']} {x.get('saat','')}</li>" for x in veri['randevular']]) or '<li>Yaklaşan randevu yok</li>'
-    recent = ''.join([f"<li>{x['tarih']} {x.get('saat','')} • {'ödendi' if int(x.get('ucret_alindi') or 0) else 'ödeme bekliyor'}</li>" for x in veri['seanslar']]) or '<li>Kayıtlı seans yok</li>'
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{klinik} Portal</title><style>body{{font-family:system-ui;background:#f8fafc;padding:24px;color:#0f172a}}.card{{max-width:760px;margin:auto;background:white;border:1px solid #e2e8f0;border-radius:16px;padding:24px;box-shadow:0 10px 24px rgba(15,23,42,.06)}}ul{{line-height:1.8}}</style></head><body><div class='card'><h2>{klinik} • Danışan Portalı</h2><p><b>{d.get('ad','')} {d.get('soyad','')}</b></p><p>Birincil terapist: {d.get('terapist_adi','')}</p><h3>Yaklaşan randevular</h3><ul>{upcoming}</ul><h3>Son seanslar</h3><ul>{recent}</ul></div></body></html>"""
-
-
-
-
-
-
-
-
-
 # ── BAŞLATMA ──────────────────────────────────────────────────────────────────────
-def get_local_ips():
-    ips = []
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        if ip and not ip.startswith('127.'):
-            ips.append(ip)
-    except Exception:
-        pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ip = info[4][0]
-            if ip and not ip.startswith('127.') and ip not in ips:
-                ips.append(ip)
-    except Exception:
-        pass
-    if not ips:
-        ips.append('127.0.0.1')
-    return ips
 
 class ArteServer(ThreadingHTTPServer):
     allow_reuse_address = True
@@ -2063,86 +1535,8 @@ def init_db():
 
 _prev_gelir_ozet_v360 = gelir_ozet
 
-def gelir_ozet(ay=None, terapist_id=None):
-    data = _prev_gelir_ozet_v360(ay, terapist_id)
-    conn = get_db()
-    sql = """SELECT COALESCE(o.ad,'Atanmamış') as oda_adi,
-                    COUNT(s.id) as seans,
-                    COALESCE(MAX(o.renk),'#94a3b8') as oda_renk
-             FROM seanslar s
-             LEFT JOIN odalar o ON o.id=s.oda_id
-             WHERE 1=1"""
-    params = []
-    if ay:
-        sql += " AND strftime('%Y-%m',s.tarih)=?"
-        params.append(ay)
-    if terapist_id:
-        sql += " AND (s.terapist_id=? OR EXISTS (SELECT 1 FROM danisan_terapistler dt WHERE dt.danisan_id=s.danisan_id AND dt.terapist_id=?))"
-        params.extend([terapist_id, terapist_id])
-    sql += " GROUP BY COALESCE(o.ad,'Atanmamış') ORDER BY seans DESC, oda_adi"
-    data['oda_ozet'] = q(conn, sql, params)
-    conn.close()
-    return data
 
 _prev_mesaj_hedefleri_v360 = mesaj_hedefleri_listesi
-
-def mesaj_hedefleri_listesi(tip='yarin_randevu', terapist_id=None, tarih=None, week_start=None):
-    if tip not in ('24saat_kala', '24saat_whatsapp'):
-        return _prev_mesaj_hedefleri_v360(tip, terapist_id, tarih, week_start)
-
-    conn = get_db()
-    klinik = ayar_al('klinik_adi', 'Arte Terapi')
-    ref = parse_iso_date(tarih, date.today())
-    hedef = ref + timedelta(days=1)
-    items = []
-
-    sql = """SELECT r.id as kaynak_id, 'randevu' as kaynak, r.tarih, r.saat, r.notlar,
-        d.id as danisan_id, d.ad, d.soyad, d.telefon, COALESCE(d.email,'') as email,
-        t.id as terapist_id, t.ad as terapist_adi,
-        h.alan_adi as hizmet_adi, o.ad as oda_adi
-        FROM randevular r
-        JOIN danisanlar d ON d.id=r.danisan_id
-        JOIN terapistler t ON t.id=r.terapist_id
-        LEFT JOIN hizmet_alanlari h ON h.id=r.hizmet_id
-        LEFT JOIN odalar o ON o.id=r.oda_id
-        WHERE date(r.tarih)=date(?)"""
-    params = [hedef.isoformat()]
-    if terapist_id:
-        sql += " AND r.terapist_id=?"
-        params.append(terapist_id)
-    rows = q(conn, sql + " ORDER BY COALESCE(r.saat,''), d.ad, d.soyad", params)
-    mevcut = set()
-    for r in rows:
-        x = dict(r)
-        x['danisan_adi'] = ((r.get('ad') or '') + ' ' + (r.get('soyad') or '')).strip()
-        x['telefon_norm'] = _turkiye_tel_normalize(r.get('telefon'))
-        x['klinik'] = klinik
-        x['oda_satiri'] = f"Oda: {r.get('oda_adi')}" if r.get('oda_adi') else ''
-        x['hedef_turu'] = '24saat_kala'
-        items.append(x)
-        mevcut.add((str(r.get('danisan_id')), str(r.get('terapist_id')), (r.get('saat') or '')[:5]))
-
-    for r in planli_program_tarih_araligi(hedef.isoformat(), hedef.isoformat(), terapist_id):
-        key = (str(r.get('danisan_id')), str(r.get('terapist_id')), (r.get('saat') or '')[:5])
-        if key in mevcut:
-            continue
-        x = dict(r)
-        x['kaynak'] = 'planli'
-        x['kaynak_id'] = r.get('plan_id')
-        x['tarih'] = hedef.isoformat()
-        x['danisan_adi'] = ((r.get('ad') or '') + ' ' + (r.get('soyad') or '')).strip()
-        x['telefon_norm'] = _turkiye_tel_normalize(r.get('telefon'))
-        x['klinik'] = klinik
-        x['oda_satiri'] = f"Oda: {r.get('oda_adi')}" if r.get('oda_adi') else ''
-        x['hedef_turu'] = '24saat_kala'
-        items.append(x)
-
-    items.sort(key=lambda x: ((x.get('tarih') or ''), (x.get('saat') or ''), (x.get('danisan_adi') or '')))
-    conn.close()
-    return {'items': items, 'tip': '24saat_kala'}
-
-
-
 
 
 # ── v3.7.0 Mobil + Oda Ayarları + Pay Detayı + Mesaj Merkezi ───────────────────
@@ -2191,43 +1585,6 @@ def init_db():
     conn.commit(); conn.close()
 
 
-def odalar_listesi():
-    init_db()
-    conn = get_db()
-    rows = q(conn, """SELECT id, ad, renk, aktif, COALESCE(notlar,'') as notlar,
-                      COALESCE(kategori,'uygulama') as kategori,
-                      COALESCE(kapasite,1) as kapasite,
-                      COALESCE(ozellikler,'') as ozellikler
-                      FROM odalar ORDER BY aktif DESC, ad""")
-    conn.close()
-    return rows
-
-
-def oda_kaydet(d):
-    init_db()
-    conn = get_db(); c = conn.cursor()
-    payload = (
-        (d.get('ad') or '').strip(),
-        d.get('renk') or '#64748b',
-        int(d.get('aktif', 1) or 0),
-        d.get('notlar') or '',
-        d.get('kategori') or 'uygulama',
-        int(d.get('kapasite', 1) or 1),
-        d.get('ozellikler') or ''
-    )
-    if not payload[0]:
-        raise ValueError('Oda adı zorunludur')
-    if d.get('id'):
-        c.execute("""UPDATE odalar SET ad=?, renk=?, aktif=?, notlar=?, kategori=?, kapasite=?, ozellikler=?
-                     WHERE id=?""", payload + (int(d['id']),))
-        lid = int(d['id'])
-    else:
-        c.execute("""INSERT INTO odalar(ad,renk,aktif,notlar,kategori,kapasite,ozellikler)
-                     VALUES(?,?,?,?,?,?,?)""", payload)
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
-
-
 def terapist_pay_detay(ay=None, terapist_id=None):
     conn = get_db()
     filt = " WHERE 1=1 "
@@ -2256,26 +1613,12 @@ def terapist_pay_detay(ay=None, terapist_id=None):
     return rows
 
 
-
-
-
-
-
-
-
-
-
 # ── v3.8.0 Pilates pay fix + Gelmedi + Danışan içgörüleri + PDF rapor + Mesaj Merkezi ──
 import io, base64, re
 
 APP_VERSION = '3.8.0'
 
 _prev_init_db_v380 = init_db
-
-def get_reports_dir():
-    p = os.path.join(get_app_dir(), 'rapor_pdfler')
-    os.makedirs(p, exist_ok=True)
-    return p
 
 
 def init_db():
@@ -2310,106 +1653,6 @@ def _coerce_float(v, default=0.0):
         return float(v or 0)
     except Exception:
         return default
-
-
-def _ucret_hesapla(hizmet, grup_turu, indirimli):
-    if not hizmet:
-        return 0.0, 0.0, 0.0
-    paket_mi = int(hizmet.get('paket_mi') or 0) == 1
-    grup_turu = (grup_turu or 'bireysel').strip()
-    if paket_mi:
-        fiyat_map = {
-            'bireysel': _coerce_float(hizmet.get('seans_ucreti') or hizmet.get('bireysel_fiyat')),
-            'grup2': _coerce_float(hizmet.get('grup2_fiyat') or hizmet.get('seans_ucreti') or hizmet.get('bireysel_fiyat')),
-            'grup3': _coerce_float(hizmet.get('grup3_fiyat') or hizmet.get('grup2_fiyat') or hizmet.get('seans_ucreti') or hizmet.get('bireysel_fiyat')),
-        }
-        toplam = fiyat_map.get(grup_turu, fiyat_map['bireysel'])
-        paket_seans = int(hizmet.get('paket_seans') or 1) or 1
-        ucret = round(toplam / paket_seans, 2)
-    else:
-        if grup_turu == 'grup2' and _coerce_float(hizmet.get('grup2_fiyat')) > 0:
-            ucret = _coerce_float(hizmet.get('grup2_fiyat'))
-        elif grup_turu == 'grup3' and _coerce_float(hizmet.get('grup3_fiyat')) > 0:
-            ucret = _coerce_float(hizmet.get('grup3_fiyat'))
-        elif indirimli and _coerce_float(hizmet.get('grup2_fiyat')) > 0:
-            ucret = _coerce_float(hizmet.get('grup2_fiyat'))
-        else:
-            ucret = _coerce_float(hizmet.get('seans_ucreti') or hizmet.get('bireysel_fiyat'))
-    terapist_oran = _coerce_float(hizmet.get('terapist_prim_orani'))
-    t_pay = round(ucret * terapist_oran, 2)
-    i_pay = round(ucret - t_pay, 2)
-    return float(ucret), t_pay, i_pay
-
-
-def seans_ekle(danisan_id, terapist_id, hizmet_id, tarih, tip='normal',
-               grup_turu='bireysel', indirimli=0, soap=None, saat='', sure_dk=45, oda_id=None,
-               ucret_alindi=0, tahsilat_tarihi='', gelmedi=0, gelmedi_nedeni=''):
-    conn = get_db(); c = conn.cursor()
-    h_list = q(conn, "SELECT * FROM hizmet_alanlari WHERE id=?", (hizmet_id,)) if hizmet_id else []
-    h = h_list[0] if h_list else None
-    ucret, t_pay, i_pay = _ucret_hesapla(h, grup_turu, indirimli)
-    if soap is None:
-        soap = {}
-    elif isinstance(soap, str):
-        soap = {'s': soap, 'o': '', 'a': '', 'p': ''}
-    elif not isinstance(soap, dict):
-        soap = dict(soap) if hasattr(soap, 'items') else {'s': str(soap), 'o': '', 'a': '', 'p': ''}
-    ucret_alindi = 1 if str(ucret_alindi) in ('1', 'True', 'true', 'on') or ucret_alindi is True else 0
-    gelmedi = 1 if str(gelmedi) in ('1', 'True', 'true', 'on') or gelmedi is True else 0
-    gelmedi_nedeni = (gelmedi_nedeni or '').strip()
-    tahsilat_tarihi = (tahsilat_tarihi or '').strip()
-    if gelmedi:
-        ucret = 0.0
-        t_pay = 0.0
-        i_pay = 0.0
-        ucret_alindi = 0
-        tahsilat_tarihi = ''
-    else:
-        if ucret_alindi and not tahsilat_tarihi:
-            tahsilat_tarihi = tarih
-        if not ucret_alindi:
-            tahsilat_tarihi = ''
-    c.execute("SELECT id FROM seanslar WHERE danisan_id=? AND terapist_id=? AND tarih=? AND COALESCE(saat,'')=COALESCE(?, '')",
-              (danisan_id, terapist_id, tarih, saat))
-    mevcut = c.fetchone()
-    if mevcut:
-        c.execute("""UPDATE seanslar SET hizmet_id=?,tip=?,grup_turu=?,ucret=?,
-            terapist_payi=?,isletme_payi=?,indirimli=?,ucret_alindi=?,tahsilat_tarihi=?,
-            soap_s=?,soap_o=?,soap_a=?,soap_p=?, saat=?, sure_dk=?, oda_id=?, gelmedi=?, gelmedi_nedeni=? WHERE id=?""",
-            (hizmet_id, tip, grup_turu, ucret, t_pay, i_pay, indirimli, ucret_alindi, tahsilat_tarihi,
-             soap.get('s',''), soap.get('o',''), soap.get('a',''), soap.get('p',''),
-             saat, sure_dk, oda_id, gelmedi, gelmedi_nedeni, mevcut['id']))
-        lid = mevcut['id']
-    else:
-        c.execute("""INSERT INTO seanslar
-            (danisan_id,terapist_id,hizmet_id,tarih,tip,grup_turu,ucret,
-             terapist_payi,isletme_payi,indirimli,ucret_alindi,tahsilat_tarihi,
-             soap_s,soap_o,soap_a,soap_p,saat,sure_dk,oda_id,gelmedi,gelmedi_nedeni)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (danisan_id, terapist_id, hizmet_id, tarih, tip, grup_turu, ucret,
-             t_pay, i_pay, indirimli, ucret_alindi, tahsilat_tarihi,
-             soap.get('s',''), soap.get('o',''), soap.get('a',''), soap.get('p',''),
-             saat, sure_dk, oda_id, gelmedi, gelmedi_nedeni))
-        lid = c.lastrowid
-    conn.commit(); conn.close(); return lid
-
-
-def seans_durum_guncelle(seans_id, gelmedi=0, gelmedi_nedeni=''):
-    conn = get_db()
-    row = q(conn, "SELECT id, hizmet_id, grup_turu, indirimli FROM seanslar WHERE id=?", (seans_id,))
-    if not row:
-        conn.close(); raise ValueError('Seans bulunamadı')
-    gelmedi = 1 if str(gelmedi) in ('1', 'True', 'true', 'on') or gelmedi is True else 0
-    gelmedi_nedeni = (gelmedi_nedeni or '').strip()
-    if gelmedi:
-        conn.execute("UPDATE seanslar SET gelmedi=1, gelmedi_nedeni=?, ucret=0, terapist_payi=0, isletme_payi=0, ucret_alindi=0, tahsilat_tarihi='' WHERE id=?", (gelmedi_nedeni, seans_id))
-    else:
-        s = row[0]
-        h_list = q(conn, "SELECT * FROM hizmet_alanlari WHERE id=?", (s['hizmet_id'],)) if s.get('hizmet_id') else []
-        h = h_list[0] if h_list else None
-        ucret, t_pay, i_pay = _ucret_hesapla(h, s.get('grup_turu') or 'bireysel', s.get('indirimli') or 0)
-        conn.execute("UPDATE seanslar SET gelmedi=0, gelmedi_nedeni='', ucret=?, terapist_payi=?, isletme_payi=? WHERE id=?", (ucret, t_pay, i_pay, seans_id))
-    conn.commit(); conn.close(); return {'ok': True}
 
 
 _prev_danisan_detay_v380 = danisan_detay
@@ -2452,41 +1695,6 @@ def _safe_pdf_name(name):
     return name
 
 
-def rapor_pdf_kaydet(d):
-    danisan_id = int(d['danisan_id'])
-    terapist_id = int(d['terapist_id']) if str(d.get('terapist_id') or '').strip() else None
-    tarih = (d.get('tarih') or date.today().isoformat())[:10]
-    dosya_adi = _safe_pdf_name(d.get('dosya_adi') or 'rapor.pdf')
-    raw = d.get('base64') or ''
-    if raw.startswith('data:'):
-        raw = raw.split(',', 1)[1] if ',' in raw else ''
-    blob = base64.b64decode(raw or b'', validate=False)
-    if not blob or not blob.startswith(b'%PDF'):
-        raise ValueError('Yalnızca PDF dosyası yüklenebilir')
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    save_name = f"danisan_{danisan_id}_{ts}_{dosya_adi}"
-    save_path = os.path.join(get_reports_dir(), save_name)
-    with open(save_path, 'wb') as f:
-        f.write(blob)
-    conn = get_db(); c = conn.cursor()
-    c.execute("""INSERT INTO danisan_rapor_dosyalari(danisan_id, terapist_id, tarih, dosya_adi, dosya_yolu, mime_tur, boyut)
-                 VALUES(?,?,?,?,?,?,?)""", (danisan_id, terapist_id, tarih, dosya_adi, save_path, 'application/pdf', len(blob)))
-    conn.commit(); lid = c.lastrowid; conn.close(); return lid
-
-
-def rapor_pdf_sil(rid):
-    conn = get_db()
-    row = q(conn, "SELECT dosya_yolu FROM danisan_rapor_dosyalari WHERE id=?", (rid,))
-    if row:
-        try:
-            if os.path.exists(row[0]['dosya_yolu']):
-                os.remove(row[0]['dosya_yolu'])
-        except Exception:
-            pass
-    conn.execute("DELETE FROM danisan_rapor_dosyalari WHERE id=?", (rid,))
-    conn.commit(); conn.close(); return {'ok': True}
-
-
 def _serve_pdf_file(handler, rid):
     conn = get_db()
     rows = q(conn, "SELECT * FROM danisan_rapor_dosyalari WHERE id=?", (rid,))
@@ -2505,14 +1713,6 @@ def _serve_pdf_file(handler, rid):
     handler.send_header('Content-Disposition', f'inline; filename="{_safe_pdf_name(row.get("dosya_adi") or "rapor.pdf")}"')
     handler.end_headers()
     handler.wfile.write(b)
-
-
-
-
-
-
-
-
 
 
 # ── v3.9.0: consistent records, packages, reporting and authenticated HTTP ──
@@ -2689,10 +1889,6 @@ def odalar_listesi():
     try:return q(c,'SELECT * FROM odalar ORDER BY aktif DESC,ad')
     finally:c.close()
 
-def hizmetler_listesi(terapist_id=None,include_inactive=False):
-    c=get_db()
-    try:return q(c,'SELECT h.*,t.ad as terapist_adi FROM hizmet_alanlari h JOIN terapistler t ON t.id=h.terapist_id WHERE 1=1'+('' if include_inactive else ' AND h.aktif=1')+(' AND h.terapist_id=?' if terapist_id else '')+' ORDER BY h.alan_adi',([terapist_id] if terapist_id else []))
-    finally:c.close()
 
 def danisan_ekle(d):
     with transaction() as c:
@@ -3106,11 +2302,6 @@ def portal_veri(token):
         return {'danisan':dict(d),'randevular':q(c,"SELECT tarih,saat FROM randevular WHERE danisan_id=? AND tarih>=? AND durum NOT IN('iptal','tamamlandi') ORDER BY tarih,saat LIMIT 30",(did,date.today().isoformat())),'seanslar':q(c,'SELECT tarih,saat,gelmedi FROM seanslar WHERE danisan_id=? ORDER BY tarih DESC,saat DESC LIMIT 30',(did,))}
     finally:c.close()
 
-def public_portal_html(token):
-    data=portal_veri(token)
-    if not data:return '<meta charset="utf-8"><p>Bağlantı geçersiz veya süresi dolmuş.</p>'
-    esc=html_lib.escape
-    return '<meta charset="utf-8"><title>Danışan Portalı</title><h2>'+esc(data['danisan']['ad']+' '+data['danisan']['soyad'])+'</h2><h3>Yaklaşan randevular</h3><ul>'+''.join('<li>'+esc(r['tarih']+' '+r['saat'])+'</li>' for r in data['randevular'])+'</ul>'
 
 def mesaj_hedefleri_listesi(tip='yarin_randevu',terapist_id=None,tarih=None,week_start=None):
     ref=date.fromisoformat(valid_date(tarih or date.today().isoformat()));c=get_db();items=[]
@@ -3360,6 +2551,12 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/client':
                 d=danisan_detay(qs.get('id'));return self._send(d if d else {'error':'Danışan bulunamadı.'},200 if d else 404)
             if path=='/api/report':return self._send(gelir_raporu(qs.get('start'),qs.get('end'),qs.get('terapist_id')))
+            if path in ('/api/payroll','/api/payroll.csv'):
+                import payroll
+                result=payroll.report(globals(),qs.get('ay'),qs.get('terapist_id'))
+                if path.endswith('.csv'):
+                    return self._send(payroll.csv_text(result),ctype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="Maas_'+result['ay']+'.csv"'})
+                return self._send(result)
             if path=='/api/week':return self._send(seans_haftalik_programi(qs.get('start'),qs.get('terapist_id')))
             if path=='/api/targets':return self._send(mesaj_hedefleri_listesi(qs.get('tip','24saat_kala'),qs.get('terapist_id'),qs.get('tarih'),qs.get('week_start')))
             if path=='/api/backup':return self._send(backup_bytes(),ctype='application/zip',headers={'Content-Disposition':'attachment; filename="ArteTerapi_yedek.zip"'})
@@ -3417,6 +2614,9 @@ class Handler(BaseHTTPRequestHandler):
             auth=self._auth()
             if not auth:return self._send({'error':'Oturum açınız.'},401)
             if not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),auth['csrf']):return self._send({'error':'Güvenlik anahtarı geçersiz. Sayfayı yenileyin.'},403)
+            if path=='/api/payroll/rates':
+                import payroll
+                return self._send({'ok':True,'data':payroll.save_rates(globals(),d)})
             if path=='/api/logout':
                 with transaction() as c:c.execute('DELETE FROM auth_sessions WHERE token_hash=?',(auth['token_hash'],))
                 return self._send({'ok':True},headers={'Set-Cookie':'arte_session=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/'})
@@ -3440,18 +2640,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             print('POST error:',type(e).__name__,str(e),file=sys.stderr);self._send({'error':'İşlem tamamlanamadı. Kaydı yenileyip tekrar deneyin.'},500)
 
-
-def _run_app():
-    init_db()
-    bind=os.getenv('ARTE_BIND','127.0.0.1');port=int(os.getenv('ARTE_PORT',str(PORT)))
-    server=ArteServer((bind,port),Handler)
-    print(f'Arte Terapi v{APP_VERSION} — http://127.0.0.1:{port}')
-    print('İlk açılışta tarayıcıdan yönetici parolanızı belirleyin. Veriler: '+DB_PATH)
-    if bind!='127.0.0.1':print('Ağ erişimi açık. Yalnız güvenilir ağda kullanın; internet erişimi için HTTPS gereklidir.')
-    threading.Timer(1,lambda:webbrowser.open(f'http://127.0.0.1:{port}')).start()
-    try:server.serve_forever()
-    except KeyboardInterrupt:pass
-    finally:server.server_close()
 
 def schedule_conflicts(kind,d):
     if kind not in ('seanslar','randevular','planlar','rezervasyonlar'):return {'has_conflict':False,'items':[]}

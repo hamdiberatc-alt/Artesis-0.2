@@ -6,6 +6,7 @@ from test_core import AppTest
 from test_multi import MultiTest
 from test_operations import OperationsTest
 from test_pilates import PilatesTest
+from test_payroll import PayrollTest
 
 
 def setup(self):
@@ -23,8 +24,8 @@ def teardown(self):
 
 def load_tests(loader, tests, pattern):
     suite = unittest.TestSuite()
-    excluded = {'test_auth_http_pdf', 'test_fresh_and_idempotent', 'test_http_statement_requires_auth_and_pdf_scope'}
-    for base in (AppTest, MultiTest, OperationsTest, PilatesTest):
+    excluded = {'test_auth_http_pdf', 'test_fresh_and_idempotent', 'test_http_statement_requires_auth_and_pdf_scope', 'test_payroll_http_auth_csrf_and_export'}
+    for base in (AppTest, MultiTest, OperationsTest, PilatesTest, PayrollTest):
         cls = type('Cloud'+base.__name__, (base,), {'setUp':setup,'tearDown':teardown,
             'connect':CloudTest.connect,'cleanup_cloud':CloudTest.cleanup_cloud})
         for name in base.__dict__:
