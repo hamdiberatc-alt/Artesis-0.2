@@ -114,6 +114,14 @@ class CloudTest(unittest.TestCase):
         os.environ['ARTE_ADMIN_PASSWORD']='Different-password-12345'
         m=runpy.run_path(str(ROOT/'app.py'));m['init_db']()
         self.assertEqual(m['ayar_al']('admin_password_hash'),stored)
+    def test_payroll_rates_survive_new_worker(self):
+        import payroll
+        month=self.app['date'].today().strftime('%Y-%m')
+        payroll.save_rates(self.app,dict(ay=month,terapist_id=1,bireysel='125,50',grup2=200,grup3=300))
+        second=runpy.run_path(str(ROOT/'app.py'));second['init_db']()
+        row=payroll.report(second,month,1)['terapistler'][0]
+        self.assertTrue(row['ayarlanmis'])
+        self.assertEqual(row['ucretler']['bireysel'],125.50)
     def test_configuration_fails_closed(self):
         os.environ['ARTE_ADMIN_PASSWORD']='short'
         m=runpy.run_path(str(ROOT/'app.py'))
