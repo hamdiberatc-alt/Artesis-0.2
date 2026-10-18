@@ -20,6 +20,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cloud import db
+
+class SchemaUpgradeTest(unittest.TestCase):
+    def test_existing_cloud_schema_gains_makeup_plan_columns(self):
+        from cloud.runtime import ensure_schema
+        for version in ('1','2'):
+            with self.subTest(version=version):
+                c=sqlite3.connect(':memory:')
+                try:
+                    c.execute('CREATE TABLE cloud_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
+                    c.execute('CREATE TABLE seanslar(id INTEGER PRIMARY KEY'+(',telafi_kaynak_id INTEGER' if version=='2' else '')+')')
+                    c.execute("INSERT INTO cloud_meta VALUES('version',?)",(version,))
+                    c.commit()
+                    ensure_schema(c,lambda:'unused')
+                    cols={r[1] for r in c.execute('PRAGMA table_info(seanslar)')}
+                    self.assertTrue({'telafi_kaynak_id','telafi_plan_tarihi','telafi_plan_saat'}<=cols)
+                    self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'3')
+                finally:c.close()
 from cloud.runtime import ensure_schema, export_backup
 
 

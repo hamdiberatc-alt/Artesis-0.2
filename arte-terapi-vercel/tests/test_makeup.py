@@ -12,11 +12,15 @@ class MakeupTest(AppTest):
         cancelled = self.pilates(package_id, '09:00', gelmedi=1,
                                   gelmedi_nedeni='İptal edildi', hak_dustu=1)
         self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 3)
+        cancelled_row=self.call('seans_detay',cancelled)
+        self.assertEqual(cancelled_row['terapist_payi'],0)
+        self.assertEqual(cancelled_row['isletme_payi'],cancelled_row['ucret'])
         pending = self.pilates(package_id, '10:00', gelmedi=1,
-                                gelmedi_nedeni='Telafi bekliyor', hak_dustu=0)
-        self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 3)
+                                gelmedi_nedeni='Telafi bekliyor', hak_dustu=1)
+        self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 2)
         makeup = self.pilates(package_id, '11:00', tip='telafi', telafi_kaynak_id=pending)
         self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 2)
+        self.assertEqual(self.call('seans_detay', makeup)['hak_dustu'], 0)
         self.assertEqual(self.call('paket_seanslari', package_id)[-1]['telafi_kaynak_id'], pending)
         self.assertEqual(next(s for s in self.call('paket_seanslari', package_id) if s['id'] == pending)['telafi_yapildi'], 1)
         week = self.call('seans_haftalik_programi', self.today)
@@ -28,8 +32,30 @@ class MakeupTest(AppTest):
         self.pilates(package_id, '13:00')
         self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 1)
         self.call('seans_sil', makeup)
-        self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 2)
+        self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 1)
         self.assertEqual(self.call('seans_detay', cancelled)['gelmedi'], 1)
+
+    def test_makeup_can_be_scheduled_only_within_package_period(self):
+        package_id = self.package(n=2, gift=0, price=600)
+        pending = self.pilates(package_id, '10:00', gelmedi=1,
+                                gelmedi_nedeni='Telafi bekliyor', hak_dustu=1)
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        self.call('telafi_planla', {'id': pending, 'tarih': tomorrow, 'saat': '11:00'})
+        planned = [r for r in self.call('seans_haftalik_programi', tomorrow)['items']
+                   if r.get('kaynak') == 'telafi_planli']
+        self.assertEqual(len(planned), 1)
+        self.assertEqual((planned[0]['telafi_kaynak_id'], planned[0]['tarih']), (pending, tomorrow))
+        self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 1)
+        with self.assertRaises(ValueError):
+            self.call('telafi_planla', {'id': pending, 'tarih': (date.today()+timedelta(days=61)).isoformat(), 'saat': '11:00'})
+        self.call('telafi_planla', {'id': pending, 'islem': 'yeniden'})
+        self.assertFalse([r for r in self.call('seans_haftalik_programi', tomorrow)['items']
+                          if r.get('kaynak') == 'telafi_planli'])
+        self.call('telafi_planla', {'id': pending, 'tarih': self.today, 'saat': '12:00'})
+        self.pilates(package_id, '12:00', tip='telafi', telafi_kaynak_id=pending)
+        self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 1)
+        self.assertFalse([r for r in self.call('seans_haftalik_programi', self.today)['items']
+                          if r.get('kaynak') == 'telafi_planli'])
 
     def test_burned_session_uses_right_without_counting_attendance(self):
         package_id = self.package(n=2, gift=0, price=600)

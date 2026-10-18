@@ -1836,7 +1836,7 @@ def init_db():
                 PRIMARY KEY(rule_id,target_key,run_date));
             ''')
             for table,fields in {
-                'seanslar':{'paket_id':'INTEGER REFERENCES pilates_paketleri(id)','hediye':'INTEGER DEFAULT 0','hak_dustu':'INTEGER DEFAULT 1','prim_orani':'REAL DEFAULT 0','anlasilan_ucret':'REAL DEFAULT 0','telafi_kaynak_id':'INTEGER REFERENCES seanslar(id)'},
+                'seanslar':{'paket_id':'INTEGER REFERENCES pilates_paketleri(id)','hediye':'INTEGER DEFAULT 0','hak_dustu':'INTEGER DEFAULT 1','prim_orani':'REAL DEFAULT 0','anlasilan_ucret':'REAL DEFAULT 0','telafi_kaynak_id':'INTEGER REFERENCES seanslar(id)','telafi_plan_tarihi':"TEXT DEFAULT ''",'telafi_plan_saat':"TEXT DEFAULT ''"},
                 'odemeler':{'seans_id':'INTEGER REFERENCES seanslar(id) ON DELETE CASCADE','paket_id':'INTEGER REFERENCES pilates_paketleri(id) ON DELETE CASCADE'},
                 'kasa':{'kaynak_id':'INTEGER'},
                 'hizmet_alanlari':{'hediye_seans':'INTEGER DEFAULT 0'},
@@ -1964,11 +1964,43 @@ def paket_seanslari(paket_id):
     try:
         exists(c,'pilates_paketleri',paket_id,'Paket')
         return q(c,'''SELECT s.id,s.tarih,s.saat,s.tip,s.gelmedi,s.gelmedi_nedeni,s.hak_dustu,
-            s.hediye,s.telafi_kaynak_id,s.ucret,t.ad terapist_adi,
+            s.hediye,s.telafi_kaynak_id,s.telafi_plan_tarihi,s.telafi_plan_saat,s.ucret,t.ad terapist_adi,
             EXISTS(SELECT 1 FROM seanslar made WHERE made.telafi_kaynak_id=s.id) telafi_yapildi
             FROM seanslar s LEFT JOIN terapistler t ON t.id=s.terapist_id
             WHERE s.paket_id=? ORDER BY s.tarih,s.saat,s.id''',(paket_id,))
     finally:c.close()
+
+def telafi_planla(d):
+    with transaction() as c:
+        source=exists(c,'seanslar',integer(d.get('id'),1),'Telafi edilecek seans')
+        if source['gelmedi_nedeni']!='Telafi bekliyor' or not source['gelmedi'] or not source['hak_dustu'] or not source['paket_id']:
+            raise ValueError('Yalnızca hak düşülmüş, bekleyen paket seansı planlanabilir.')
+        if c.execute('SELECT 1 FROM seanslar WHERE telafi_kaynak_id=?',(source['id'],)).fetchone():
+            raise ValueError('Bu seansın telafisi zaten yapılmış.')
+        action=d.get('islem','planla')
+        if action=='yeniden':
+            c.execute("UPDATE seanslar SET telafi_plan_tarihi='',telafi_plan_saat='' WHERE id=?",(source['id'],))
+            return source['id']
+        if action=='iptal':
+            c.execute("UPDATE seanslar SET gelmedi_nedeni='İptal edildi',telafi_plan_tarihi='',telafi_plan_saat='' WHERE id=?",(source['id'],))
+            return source['id']
+        if action!='planla':raise ValueError('Telafi işlemi geçersiz.')
+        dt=valid_date(d.get('tarih'));st=valid_time(d.get('saat'))
+        p=exists(c,'pilates_paketleri',source['paket_id'],'Paket')
+        if not p['baslangic']<=dt<=p['bitis'] or dt<source['tarih'] or dt<date.today().isoformat():
+            raise ValueError('Telafi tarihi, kaçırılan seanstan sonra ve paket kullanım süresi içinde olmalıdır.')
+        if dt==source['tarih'] and st==source['saat']:
+            raise ValueError('Telafi için kaçırılan seanstan farklı bir saat seçiniz.')
+        if c.execute('SELECT 1 FROM seanslar WHERE danisan_id=? AND tarih=? AND saat=? AND id<>?',(source['danisan_id'],dt,st,source['id'])).fetchone():
+            raise ValueError('Danışanın aynı gün ve saatte başka seansı var.')
+        if c.execute("SELECT 1 FROM seanslar WHERE danisan_id=? AND telafi_plan_tarihi=? AND telafi_plan_saat=? AND id<>? AND gelmedi_nedeni='Telafi bekliyor'",(source['danisan_id'],dt,st,source['id'])).fetchone():
+            raise ValueError('Danışanın aynı gün ve saatte başka telafisi var.')
+        if c.execute('''SELECT 1 FROM haftalik_program_sablonlari WHERE aktif=1 AND danisan_id=? AND gun_index=? AND saat=?
+            AND (baslangic IS NULL OR baslangic='' OR baslangic<=?) AND (bitis IS NULL OR bitis='' OR bitis>=?)''',
+            (source['danisan_id'],date.fromisoformat(dt).weekday(),st,dt,dt)).fetchone():
+            raise ValueError('Danışanın aynı gün ve saatte haftalık programı var.')
+        c.execute('UPDATE seanslar SET telafi_plan_tarihi=?,telafi_plan_saat=? WHERE id=?',(dt,st,source['id']))
+        return source['id']
 
 def _paket_seanslarini_yeniden_fiyatlandir(c,paket_id,toplam,seans_sayisi):
     """Keep every consumed paid session on the package's fixed per-session price."""
@@ -2068,17 +2100,18 @@ def seans_kaydet(d):
         if room and not exists(c,'odalar',room,'Oda')['aktif']:raise ValueError('Oda pasif.')
         typ=v.get('tip','normal')
         if typ not in ('normal','degerlendirme','telafi'):raise ValueError('Seans türü geçersiz.')
-        no=flag(v.get('gelmedi',0));consumed=1 if not no else flag(v.get('hak_dustu',0));gift=flag(v.get('hediye',0));pid=v.get('paket_id') or None
+        no=flag(v.get('gelmedi',0));gift=flag(v.get('hediye',0));pid=v.get('paket_id') or None
         makeup_id=v.get('telafi_kaynak_id') or None
+        consumed=0 if makeup_id else (1 if not no else flag(v.get('hak_dustu',0)))
         if no and typ=='telafi':raise ValueError('Yapılmamış seans telafi olarak kaydedilemez.')
         if makeup_id:
             if not pid:raise ValueError('Telafi için paket seçiniz.')
             if typ!='telafi' or no:raise ValueError('Telafi seansı gerçekleşmiş olmalıdır.')
             source=exists(c,'seanslar',integer(makeup_id,1),'Telafi edilecek seans')
-            if source['id']==old.get('id') or source['danisan_id']!=did or str(source['paket_id'])!=str(pid) or not source['gelmedi'] or source['gelmedi_nedeni']!='Telafi bekliyor':raise ValueError('Telafi kaynağı aynı danışanın bekleyen paket seansı olmalıdır.')
+            if source['id']==old.get('id') or source['danisan_id']!=did or str(source['paket_id'])!=str(pid) or not source['gelmedi'] or source['gelmedi_nedeni']!='Telafi bekliyor' or not source['hak_dustu']:raise ValueError('Telafi kaynağı aynı danışanın hak düşülmüş bekleyen paket seansı olmalıdır.')
             if dt<source['tarih']:raise ValueError('Telafi tarihi kaçırılan seanstan önce olamaz.')
             if c.execute('SELECT 1 FROM seanslar WHERE telafi_kaynak_id=? AND id<>?',(source['id'],old.get('id',0))).fetchone():raise ValueError('Bu seansın telafisi zaten kaydedilmiş.')
-        if old and c.execute('SELECT 1 FROM seanslar WHERE telafi_kaynak_id=?',(old['id'],)).fetchone() and (not no or v.get('gelmedi_nedeni')!='Telafi bekliyor' or consumed):raise ValueError('Telafisi yapılmış seansın durumunu değiştirmek için önce telafiyi silin.')
+        if old and c.execute('SELECT 1 FROM seanslar WHERE telafi_kaynak_id=?',(old['id'],)).fetchone() and (not no or v.get('gelmedi_nedeni')!='Telafi bekliyor' or not consumed):raise ValueError('Telafisi yapılmış seansın durumunu değiştirmek için önce telafiyi silin.')
         if not old and h['kategori']=='pilates' and not pid:raise ValueError('Pilates seansı için üyenin satın aldığı paketi seçin.')
         group=v.get('grup_turu','bireysel');ind=flag(v.get('indirimli',0))
         if old and old.get('paket_id') and str(old['paket_id'])!=str(pid):raise ValueError('Kayıtlı paket bağlantısını değiştirmek için önce seansı silip yeniden kaydedin.')
@@ -2090,7 +2123,7 @@ def seans_kaydet(d):
         if pid:
             p=exists(c,'pilates_paketleri',pid,'Paket')
             if p['danisan_id']!=did or h['kategori']!='pilates':raise ValueError('Paket/danışan/hizmet eşleşmiyor.')
-            if not p['baslangic']<=dt<=p['bitis'] and not (makeup_id and dt>=source['tarih']):raise ValueError('Seans paket tarih aralığı dışında.')
+            if not p['baslangic']<=dt<=p['bitis']:raise ValueError('Seans paket tarih aralığı dışında.')
             if not p['aktif'] and not old and not makeup_id:raise ValueError('Paket pasif.')
             group=p['grup_turu']
             rows=q(c,'SELECT hediye,ucret FROM seanslar WHERE paket_id=? AND hak_dustu=1 AND id<>?',(pid,old.get('id',0)))
@@ -2120,6 +2153,8 @@ def seans_kaydet(d):
         if old:c.execute('UPDATE seanslar SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',values+[old['id']]);sid=old['id']
         else:sid=c.execute('INSERT INTO seanslar('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',values).lastrowid
         c.execute('UPDATE seanslar SET telafi_kaynak_id=? WHERE id=?',(makeup_id,sid))
+        if not no or v.get('gelmedi_nedeni')!='Telafi bekliyor':
+            c.execute("UPDATE seanslar SET telafi_plan_tarihi='',telafi_plan_saat='' WHERE id=?",(sid,))
         origin_day=v.get('plan_tarihi') or '';origin_time=v.get('planlanan_saat') or '';origin_program=str(v.get('program_id') or '')
         if origin_day:valid_date(origin_day)
         if origin_time:valid_time(origin_time)
@@ -2210,6 +2245,18 @@ def seans_haftalik_programi(week_start=None,terapist_id=None):
         for r in q(c,"SELECT * FROM randevular WHERE durum='iptal' AND tarih BETWEEN ? AND ?",(mon.isoformat(),sun.isoformat())):keys.add((r['tarih'],r['danisan_id'],r['terapist_id'],r['saat']))
         rows=[r for r in rows if mon.isoformat()<=r['tarih']<=sun.isoformat()]
         for r in rows:r['kaynak']='gerceklesen'
+        makeups=q(c,'''SELECT s.*,d.ad||' '||d.soyad danisan_adi,t.ad terapist_adi,h.alan_adi hizmet_adi
+            FROM seanslar s JOIN danisanlar d ON d.id=s.danisan_id JOIN terapistler t ON t.id=s.terapist_id
+            LEFT JOIN hizmet_alanlari h ON h.id=s.hizmet_id
+            WHERE s.gelmedi_nedeni='Telafi bekliyor' AND s.telafi_plan_tarihi BETWEEN ? AND ?
+            AND NOT EXISTS(SELECT 1 FROM seanslar made WHERE made.telafi_kaynak_id=s.id)'''+
+            (' AND s.terapist_id=?' if terapist_id else ''),
+            [mon.isoformat(),sun.isoformat()]+([terapist_id] if terapist_id else []))
+        for r in makeups:
+            keys.add((r['telafi_plan_tarihi'],r['danisan_id'],r['terapist_id'],r['telafi_plan_saat']))
+            rows.append({**r,'tarih':r['telafi_plan_tarihi'],'saat':r['telafi_plan_saat'],
+                         'kaynak':'telafi_planli','tip':'telafi','gelmedi':0,'hak_dustu':0,
+                         'telafi_kaynak_id':r['id'],'telafi_kaynak_tarihi':r['tarih']})
         plans=haftalik_program_sablonlari_listesi(terapist_id,mon.isoformat(),sun.isoformat())
         for p in plans:
             dt=(mon+timedelta(days=p['gun_index'])).isoformat()
@@ -3499,13 +3546,14 @@ _SAVE_PILATES_GROUP=_save_kind
 def _save_kind(kind,d):
     if kind=='grup_programi':return grup_programi_kaydet(d)
     if kind=='grup_katilim':return grup_katilim_kaydet(d)
+    if kind=='telafi_planla':return telafi_planla(d)
     return _SAVE_PILATES_GROUP(kind,d)
 
 def read_report_blob(record):
     if not os.path.isfile(record['dosya_yolu']): return None
     with open(record['dosya_yolu'], 'rb') as stream: return stream.read()
 
-APP_VERSION='3.14.0'
+APP_VERSION='3.15.0'
 
 if CLOUD_MODE:
     from cloud.runtime import install
