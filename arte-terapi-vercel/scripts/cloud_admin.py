@@ -19,6 +19,14 @@ from cloud import db
 from cloud.runtime import SCHEMA, CLOUD_VERSION, export_backup
 
 
+def status(*parts, file=None):
+    """Keep CLI messages printable on Windows consoles with legacy encodings."""
+    stream = file or sys.stdout
+    encoding = stream.encoding or 'utf-8'
+    message = ' '.join(str(part) for part in parts)
+    stream.write(message.encode(encoding, errors='backslashreplace').decode(encoding) + '\n')
+
+
 def credentials():
     if not os.getenv('TURSO_DATABASE_URL'):
         os.environ['TURSO_DATABASE_URL'] = input('Turso veritabanı adresi: ').strip()
@@ -73,7 +81,7 @@ def prepare_import(source, destination):
                 target.write('PRAGMA foreign_keys=OFF;\n')
                 for line in c.iterdump():target.write(line+'\n')
         finally:c.close()
-    print('Aktarım dosyası hazır. Bu dosya kişisel kayıt içerir; GitHub’a yüklemeyin.')
+    status('Aktarım dosyası hazır. Bu dosya kişisel kayıt içerir; GitHub’a yüklemeyin.')
 
 
 def main():
@@ -91,7 +99,7 @@ def main():
         if args.action=='backup':
             content=export_backup(c)
             with args.destination.open('xb') as f:f.write(content)
-            print('Veritabanı ve PDF raporları birlikte yedeklendi:',args.destination)
+            status('Veritabanı ve PDF raporları birlikte yedeklendi:',args.destination)
         else:
             password=getpass.getpass('Yeni parola (en az 16 karakter): ')
             if len(password)<16:raise ValueError('Parola en az 16 karakter olmalı.')
@@ -102,7 +110,7 @@ def main():
             c.execute('BEGIN IMMEDIATE')
             c.execute("UPDATE ayarlar SET deger=? WHERE anahtar='admin_password_hash'",(hashed,))
             c.execute('DELETE FROM auth_sessions');c.commit()
-            print('Parola değiştirildi; açık oturumlar sonlandırıldı.')
+            status('Parola değiştirildi; açık oturumlar sonlandırıldı.')
     except Exception:
         c.rollback();raise
     finally:c.close()
@@ -110,5 +118,5 @@ def main():
 if __name__=='__main__':
     try:main()
     except Exception as error:
-        print('İşlem tamamlanamadı:',str(error),file=sys.stderr)
+        status('İşlem tamamlanamadı:',str(error),file=sys.stderr)
         sys.exit(1)
