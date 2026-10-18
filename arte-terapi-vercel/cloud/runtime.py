@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS cloud_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_pdf_chunks(report_id INTEGER NOT NULL REFERENCES danisan_rapor_dosyalari(id) ON DELETE CASCADE,part INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(report_id,part));
 CREATE TABLE IF NOT EXISTS cloud_rate_limits(key TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
 '''
-CLOUD_VERSION = '1'
+CLOUD_VERSION = '2'
 PDF_LIMIT = 2 * 1024 * 1024
 
 
@@ -28,7 +28,18 @@ def ensure_schema(c, password_hash):
     # A new serverless worker must not take a writer lock on an installed DB.
     if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_meta'").fetchone():
         version = c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()
-        if not version or version[0] != CLOUD_VERSION:
+        if version and version[0] == '1':
+            c.execute('BEGIN IMMEDIATE')
+            try:
+                columns = {row[1] for row in c.execute('PRAGMA table_info(seanslar)')}
+                if 'telafi_kaynak_id' not in columns:
+                    c.execute('ALTER TABLE seanslar ADD COLUMN telafi_kaynak_id INTEGER REFERENCES seanslar(id)')
+                c.execute("UPDATE cloud_meta SET value=? WHERE key='version'", (CLOUD_VERSION,))
+                c.commit()
+            except Exception:
+                c.rollback()
+                raise
+        elif not version or version[0] != CLOUD_VERSION:
             raise ValueError('Bulut şeması uyumsuz. Güncelleme öncesi yedek alın.')
         return
     c.execute('BEGIN IMMEDIATE')
