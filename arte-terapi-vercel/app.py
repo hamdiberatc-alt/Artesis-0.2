@@ -1964,7 +1964,8 @@ def paket_seanslari(paket_id):
     try:
         exists(c,'pilates_paketleri',paket_id,'Paket')
         return q(c,'''SELECT s.id,s.tarih,s.saat,s.tip,s.gelmedi,s.gelmedi_nedeni,s.hak_dustu,
-            s.hediye,s.telafi_kaynak_id,s.ucret,t.ad terapist_adi
+            s.hediye,s.telafi_kaynak_id,s.ucret,t.ad terapist_adi,
+            EXISTS(SELECT 1 FROM seanslar made WHERE made.telafi_kaynak_id=s.id) telafi_yapildi
             FROM seanslar s LEFT JOIN terapistler t ON t.id=s.terapist_id
             WHERE s.paket_id=? ORDER BY s.tarih,s.saat,s.id''',(paket_id,))
     finally:c.close()
@@ -2200,7 +2201,9 @@ def haftalik_meta(week_start=None):
 def seans_haftalik_programi(week_start=None,terapist_id=None):
     mon,sun,days,hours=haftalik_meta(week_start);c=get_db()
     try:
-        rows=q(c,'''SELECT s.*,d.ad||' '||d.soyad danisan_adi,t.ad terapist_adi,h.alan_adi hizmet_adi FROM seanslar s JOIN danisanlar d ON d.id=s.danisan_id JOIN terapistler t ON t.id=s.terapist_id LEFT JOIN hizmet_alanlari h ON h.id=s.hizmet_id WHERE (s.tarih BETWEEN ? AND ? OR s.plan_tarihi BETWEEN ? AND ?)'''+(' AND s.terapist_id=?' if terapist_id else ''),[mon.isoformat(),sun.isoformat(),mon.isoformat(),sun.isoformat()]+([terapist_id] if terapist_id else []))
+        rows=q(c,'''SELECT s.*,d.ad||' '||d.soyad danisan_adi,t.ad terapist_adi,h.alan_adi hizmet_adi,
+            EXISTS(SELECT 1 FROM seanslar made WHERE made.telafi_kaynak_id=s.id) telafi_yapildi
+            FROM seanslar s JOIN danisanlar d ON d.id=s.danisan_id JOIN terapistler t ON t.id=s.terapist_id LEFT JOIN hizmet_alanlari h ON h.id=s.hizmet_id WHERE (s.tarih BETWEEN ? AND ? OR s.plan_tarihi BETWEEN ? AND ?)'''+(' AND s.terapist_id=?' if terapist_id else ''),[mon.isoformat(),sun.isoformat(),mon.isoformat(),sun.isoformat()]+([terapist_id] if terapist_id else []))
         keys={(r['tarih'],r['danisan_id'],r['terapist_id'],r['saat']) for r in rows}
         for r in rows:
             if r.get('plan_tarihi') and r.get('planlanan_saat'):keys.add((r['plan_tarihi'],r['danisan_id'],r['terapist_id'],r['planlanan_saat']))

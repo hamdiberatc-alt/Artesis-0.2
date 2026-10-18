@@ -18,6 +18,9 @@ class MakeupTest(AppTest):
         makeup = self.pilates(package_id, '11:00', tip='telafi', telafi_kaynak_id=pending)
         self.assertEqual(self.call('paketler_listesi')[0]['kalan'], 2)
         self.assertEqual(self.call('paket_seanslari', package_id)[-1]['telafi_kaynak_id'], pending)
+        self.assertEqual(next(s for s in self.call('paket_seanslari', package_id) if s['id'] == pending)['telafi_yapildi'], 1)
+        week = self.call('seans_haftalik_programi', self.today)
+        self.assertEqual(next(s for s in week['items'] if s.get('id') == pending)['telafi_yapildi'], 1)
         with self.assertRaises(ValueError):
             self.pilates(package_id, '12:00', tip='telafi', telafi_kaynak_id=pending)
         with self.assertRaises(ValueError):
