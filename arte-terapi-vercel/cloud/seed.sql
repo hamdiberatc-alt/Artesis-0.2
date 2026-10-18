@@ -251,7 +251,7 @@ CREATE TABLE seanslar (
         soap_s TEXT DEFAULT '',
         soap_o TEXT DEFAULT '',
         soap_a TEXT DEFAULT '',
-        soap_p TEXT DEFAULT '', saat TEXT DEFAULT '', sure_dk INTEGER DEFAULT 45, oda_id INTEGER, gelmedi INTEGER DEFAULT 0, gelmedi_nedeni TEXT DEFAULT '', paket_id INTEGER REFERENCES pilates_paketleri(id), hediye INTEGER DEFAULT 0, hak_dustu INTEGER DEFAULT 1, prim_orani REAL DEFAULT 0, anlasilan_ucret REAL DEFAULT 0, program_id TEXT DEFAULT '', planlanan_saat TEXT DEFAULT '', plan_tarihi TEXT DEFAULT '', telafi_kaynak_id INTEGER REFERENCES seanslar(id),
+        soap_p TEXT DEFAULT '', saat TEXT DEFAULT '', sure_dk INTEGER DEFAULT 45, oda_id INTEGER, gelmedi INTEGER DEFAULT 0, gelmedi_nedeni TEXT DEFAULT '', paket_id INTEGER REFERENCES pilates_paketleri(id), hediye INTEGER DEFAULT 0, hak_dustu INTEGER DEFAULT 1, prim_orani REAL DEFAULT 0, anlasilan_ucret REAL DEFAULT 0, program_id TEXT DEFAULT '', planlanan_saat TEXT DEFAULT '', plan_tarihi TEXT DEFAULT '', telafi_kaynak_id INTEGER REFERENCES seanslar(id), telafi_plan_tarihi TEXT DEFAULT '', telafi_plan_saat TEXT DEFAULT '',
         FOREIGN KEY(danisan_id) REFERENCES danisanlar(id),
         FOREIGN KEY(terapist_id) REFERENCES terapistler(id)
     );
