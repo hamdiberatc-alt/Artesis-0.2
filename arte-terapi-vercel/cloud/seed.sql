@@ -295,7 +295,7 @@ INSERT INTO "ayarlar" VALUES('ozel_renk','#f5b800');
 INSERT INTO "ayarlar" VALUES('db_path','/tmp/tmpyjoaw139/seed.db');
 INSERT INTO "ayarlar" VALUES('schema_370_initialized','1');
 INSERT INTO "ayarlar" VALUES('schema_390','1');
-INSERT INTO "ayarlar" VALUES('app_version','3.13.0');
+INSERT INTO "ayarlar" VALUES('app_version','3.16.0');
 INSERT INTO "ayarlar" VALUES('schema_3100','1');
 INSERT INTO "ayarlar" VALUES('schema_3110','1');
 INSERT INTO "ayarlar" VALUES('schema_3120','1');

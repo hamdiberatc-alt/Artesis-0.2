@@ -9,6 +9,22 @@ class OperationsTest(AppTest):
   self.assertEqual(len(self.rows('SELECT * FROM pilates_paketleri')),1);self.assertEqual(len(self.rows('SELECT * FROM odemeler')),1);self.assertEqual(len(self.rows('SELECT * FROM vucut_olcumleri')),1)
   self.assertEqual(len(self.rows('SELECT * FROM haftalik_program_sablonlari')),2)
   self.assertEqual(self.call('olcum_veri',r['danisan_id'])['gerceklesen'],0)
+ def test_renewal_with_explicit_program_does_not_copy_old_schedule(self):
+  old=self.package(n=1,gift=0,price=300)
+  self.call('program_kaydet',{'danisan_id':self.a,'terapist_id':3,'hizmet_id':11,'paket_id':old,
+   'baslangic':self.today,'bitis':(date.today()+timedelta(days=30)).isoformat(),
+   'slots':[{'gun_index':date.today().weekday(),'saat':'10:00'}]})
+  self.sess(terapist_id=3,hizmet_id=11,paket_id=old,saat='08:00')
+  end=(date.today()+timedelta(days=45)).isoformat()
+  payload={'istek_id':'renewal','danisan_id':self.a,
+   'paket':{'ad':'Yeni','fiyat':600,'seans_sayisi':2,'hediye_seans':0,
+    'baslangic':self.today,'bitis':end},
+   'program':{'terapist_id':3,'hizmet_id':11,'baslangic':self.today,'bitis':end,
+    'slots':[{'gun_index':date.today().weekday(),'saat':'11:00'}]}}
+  result=self.call('kayit_program',payload)
+  self.assertTrue(result['saved'])
+  plans=self.rows('SELECT saat FROM haftalik_program_sablonlari WHERE paket_id=?',(result['paket_id'],))
+  self.assertEqual(plans,[{'saat':'11:00'}])
  def test_full_rollback_after_measurement_failure(self):
   d=self.payload(olcum={'tarih':self.today,'kilo':-1})
   with self.assertRaises(ValueError):self.call('kayit_program',d)

@@ -10,6 +10,44 @@ class PilatesTest(AppTest):
   week=self.call('seans_haftalik_programi',(date.today()+timedelta(days=7)).isoformat());self.assertEqual(len(week['items']),3);self.assertTrue(all(x['paket_id']==pid for x in week['items']))
   self.assertEqual(self.call('seans_haftalik_programi',(date.today()+timedelta(days=50)).isoformat())['items'],[])
   self.assertEqual(self.call('seans_haftalik_programi',(date.today()-timedelta(days=10)).isoformat())['items'],[])
+ def test_renewed_package_keeps_weekly_attendance_available(self):
+  old=self.package(n=1,gift=0,price=300)
+  self.call('program_kaydet',{'danisan_id':self.a,'terapist_id':3,'hizmet_id':11,'paket_id':old,
+   'baslangic':self.today,'bitis':(date.today()+timedelta(days=30)).isoformat(),
+   'slots':[{'gun_index':date.today().weekday(),'saat':'10:00'}]})
+  self.sess(terapist_id=3,hizmet_id=11,paket_id=old,saat='08:00')
+  renewed=self.call('paket_kaydet',{'danisan_id':self.a,'ad':'Yenilenen paket','fiyat':600,
+   'seans_sayisi':2,'hediye_seans':0,'baslangic':self.today,
+   'bitis':(date.today()+timedelta(days=45)).isoformat()})
+  planned=next(r for r in self.call('seans_haftalik_programi',self.today)['items'] if r.get('kaynak')=='planli')
+  self.assertEqual(planned['paket_id'],renewed)
+  self.sess(terapist_id=3,hizmet_id=11,paket_id=planned['paket_id'],saat=planned['saat'])
+  self.assertEqual(next(p for p in self.call('paketler_listesi') if p['id']==renewed)['kalan'],1)
+  future=(date.today()+timedelta(days=35)).isoformat()
+  self.assertTrue(any(r.get('paket_id')==renewed for r in self.call('seans_haftalik_programi',future)['items']))
+ def test_upgrade_releases_pending_makeup_and_backfills_renewed_program(self):
+  if '_INITIALIZED_PATHS' not in self.m['init_db'].__globals__:
+   self.skipTest('Yerel veritabanı geçişi')
+  old=self.package(n=1,gift=0,price=300)
+  old_end=(date.today()+timedelta(days=30)).isoformat()
+  self.call('program_kaydet',{'danisan_id':self.a,'terapist_id':3,'hizmet_id':11,
+   'paket_id':old,'baslangic':self.today,'bitis':old_end,
+   'slots':[{'gun_index':date.today().weekday(),'saat':'10:00'}]})
+  pending=self.sess(terapist_id=3,hizmet_id=11,paket_id=old,saat='08:00',
+   gelmedi=1,gelmedi_nedeni='Telafi bekliyor',hak_dustu=1)
+  renewed=self.call('paket_kaydet',{'danisan_id':self.a,'ad':'Yeni','fiyat':600,
+   'seans_sayisi':2,'hediye_seans':0,'baslangic':self.today,
+   'bitis':(date.today()+timedelta(days=90)).isoformat()})
+  with self.call('transaction') as c:
+   c.execute('DELETE FROM haftalik_program_sablonlari WHERE paket_id=?',(renewed,))
+   c.execute('UPDATE haftalik_program_sablonlari SET aktif=1,bitis=? WHERE paket_id=?',(old_end,old))
+   c.execute("DELETE FROM ayarlar WHERE anahtar='schema_316'")
+  self.m['init_db'].__globals__['_INITIALIZED_PATHS'].clear()
+  self.call('init_db')
+  self.assertEqual(self.call('seans_detay',pending)['hak_dustu'],0)
+  self.assertEqual(self.call('seans_detay',pending)['ucret'],0)
+  future=(date.today()+timedelta(days=70)).isoformat()
+  self.assertTrue(any(r.get('paket_id')==renewed for r in self.call('seans_haftalik_programi',future)['items']))
  def test_weekly_calendar_filters_programs_outside_requested_dates(self):
   pid=self.package();start=(date.today()+timedelta(days=90)).isoformat();end=(date.today()+timedelta(days=120)).isoformat();self.call('paket_kaydet',{'id':pid,'bitis':end});self.program(pid,baslangic=start,bitis=end)
   self.assertEqual(self.call('haftalik_program_sablonlari_listesi',None,self.today,(date.today()+timedelta(days=6)).isoformat()),[])
