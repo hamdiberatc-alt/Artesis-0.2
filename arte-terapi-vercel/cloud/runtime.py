@@ -19,16 +19,16 @@ CREATE TABLE IF NOT EXISTS cloud_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_pdf_chunks(report_id INTEGER NOT NULL REFERENCES danisan_rapor_dosyalari(id) ON DELETE CASCADE,part INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(report_id,part));
 CREATE TABLE IF NOT EXISTS cloud_rate_limits(key TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
 '''
-CLOUD_VERSION = '3'
+CLOUD_VERSION = '4'
 PDF_LIMIT = 2 * 1024 * 1024
 
 
-def ensure_schema(c, password_hash):
+def ensure_schema(c, password_hash, upgrade=None):
     """Initialize only an empty database, under a remote writer lock."""
     # A new serverless worker must not take a writer lock on an installed DB.
     if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_meta'").fetchone():
         version = c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()
-        if version and version[0] in ('1','2'):
+        if version and version[0] in ('1','2','3'):
             c.execute('BEGIN IMMEDIATE')
             try:
                 columns = {row[1] for row in c.execute('PRAGMA table_info(seanslar)')}
@@ -38,6 +38,7 @@ def ensure_schema(c, password_hash):
                     c.execute("ALTER TABLE seanslar ADD COLUMN telafi_plan_tarihi TEXT DEFAULT ''")
                 if 'telafi_plan_saat' not in columns:
                     c.execute("ALTER TABLE seanslar ADD COLUMN telafi_plan_saat TEXT DEFAULT ''")
+                if upgrade:upgrade(c)
                 c.execute("UPDATE cloud_meta SET value=? WHERE key='version'", (CLOUD_VERSION,))
                 c.commit()
             except Exception:
@@ -137,7 +138,7 @@ def install(app):
             if len(password) < 16:
                 raise ValueError('ARTE_ADMIN_PASSWORD en az 16 karakter olmalı; Vercel ortam değişkenlerinden ayarlayın.')
             c = db.connect()
-            try: ensure_schema(c, lambda: app['_password_hash'](password))
+            try: ensure_schema(c, lambda: app['_password_hash'](password), app['_migrate_pilates_316'])
             finally: c.close()
             ready = True
 
