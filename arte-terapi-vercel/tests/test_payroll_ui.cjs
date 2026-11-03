@@ -45,5 +45,14 @@ function event(key,options={}){return {key,target:{classList:{contains:()=>false
  const calendar=context.renderProgramCalendar();run('navigationVersion++');
  resolve({week_start:'2026-10-12'});await calendar;
  assert.equal(nodes.get('main').innerHTML,'New page');
- console.log('PASS: payroll screen, missing rates, escaping, stale navigation and keyboard shortcuts.');
+ context.earnings={ay:'2026-10',toplam_seans:2,toplam_kazanc:90,
+  terapistler:[{terapist_id:1,terapist_adi:'Test',ilk_80_adet:1,sonraki_adet:1,ilk_80_kazanc:40,sonraki_kazanc:50,toplam_kazanc:90}],
+  ilk_80:[{terapist_adi:'Test',sira:80,tarih:'2026-10-20',saat:'10:00',danisan_adi:'<img src=x>',hizmet_adi:'Pilates',tip:'normal',hediye:false,seans_ucreti:100,oran:.4,terapist_kazanci:40}],
+  sonraki:[{terapist_adi:'Test',sira:81,tarih:'2026-10-20',saat:'11:00',danisan_adi:'Üye',hizmet_adi:'Pilates',tip:'telafi',hediye:false,seans_ucreti:100,oran:.5,terapist_kazanci:50}]};
+ run("state.page='seans_listesi';state.sessionListMonth='2026-10';api=async()=>earnings");
+ await context.renderSessionEarnings();const list=nodes.get('main').innerHTML;
+ assert(list.includes('Seans Alınma Listesi'));assert(list.includes('/api/session-earnings.csv?'));
+ assert(list.includes('%40'));assert(list.includes('%50'));assert(list.includes('&lt;img'));
+ assert(!list.includes('<img src=x>'));assert(list.includes('80. seanstan sonrası'));
+ console.log('PASS: payroll and monthly session earnings screens, escaping, stale navigation and shortcuts.');
 })().catch(error=>{console.error(error);process.exitCode=1});

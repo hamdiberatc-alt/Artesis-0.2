@@ -2695,6 +2695,13 @@ class Handler(BaseHTTPRequestHandler):
                 if path.endswith('.csv'):
                     return self._send(payroll.csv_text(result),ctype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="Maas_'+result['ay']+'.csv"'})
                 return self._send(result)
+            if path in ('/api/session-earnings','/api/session-earnings.csv'):
+                import session_earnings
+                result=session_earnings.report(globals(),qs.get('ay'),qs.get('terapist_id'))
+                if path.endswith('.csv'):
+                    return self._send(session_earnings.csv_text(result),ctype='text/csv; charset=utf-8',
+                                      headers={'Content-Disposition':'attachment; filename="Seans_Listesi_'+result['ay']+'.csv"'})
+                return self._send(result)
             if path=='/api/week':return self._send(seans_haftalik_programi(qs.get('start'),qs.get('terapist_id')))
             if path=='/api/targets':return self._send(mesaj_hedefleri_listesi(qs.get('tip','24saat_kala'),qs.get('terapist_id'),qs.get('tarih'),qs.get('week_start')))
             if path=='/api/backup':return self._send(backup_bytes(),ctype='application/zip',headers={'Content-Disposition':'attachment; filename="ArteTerapi_yedek.zip"'})
@@ -3618,7 +3625,7 @@ def read_report_blob(record):
     if not os.path.isfile(record['dosya_yolu']): return None
     with open(record['dosya_yolu'], 'rb') as stream: return stream.read()
 
-APP_VERSION='3.16.0'
+APP_VERSION='3.17.0'
 
 if CLOUD_MODE:
     from cloud.runtime import install
