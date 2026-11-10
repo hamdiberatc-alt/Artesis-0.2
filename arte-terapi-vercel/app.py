@@ -2573,7 +2573,11 @@ def _save_record(kind,d):
         fields=[f for f in allowed if f in v]
         if old:
             c.execute('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',[v[f] for f in fields]+[old['id']]);return old['id']
-        return c.execute('INSERT INTO '+table+'('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',[v[f] for f in fields]).lastrowid
+        ident=c.execute('INSERT INTO '+table+'('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',[v[f] for f in fields]).lastrowid
+        if kind=='terapistler' and 'pilates' in str(v.get('uzmanlik','')).casefold():
+            c.execute('''INSERT OR IGNORE INTO hizmet_terapistleri(hizmet_id,terapist_id)
+                         SELECT id,? FROM hizmet_alanlari WHERE kategori='pilates' AND aktif=1''',(ident,))
+        return ident
 
 def _delete_record(kind,ident):
     funcs={'danisanlar':danisan_sil,'seanslar':seans_sil,'odemeler':odeme_sil,'giderler':gider_sil,'kasa':kasa_sil,'pdf':rapor_pdf_sil}
@@ -3625,7 +3629,7 @@ def read_report_blob(record):
     if not os.path.isfile(record['dosya_yolu']): return None
     with open(record['dosya_yolu'], 'rb') as stream: return stream.read()
 
-APP_VERSION='3.17.0'
+APP_VERSION='3.18.0'
 
 if CLOUD_MODE:
     from cloud.runtime import install

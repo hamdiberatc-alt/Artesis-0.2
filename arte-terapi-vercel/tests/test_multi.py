@@ -2,6 +2,25 @@ from test_core import AppTest
 from datetime import date,timedelta
 import unittest
 class MultiTest(AppTest):
+ def test_new_pilates_therapist_can_take_sessions_and_earn_share(self):
+  import session_earnings
+  tid=self.call('_save_record','terapistler',{'ad':'Yeni','soyad':'Pilates','uzmanlik':'Pilates','aktif':1})
+  services=self.call('hizmetler_listesi',tid)
+  self.assertTrue(any(h['kategori']=='pilates' for h in services))
+  self.assertFalse(any(h['kategori']!='pilates' for h in services))
+  pid=self.package()
+  self.sess(terapist_id=tid,hizmet_id=11,paket_id=pid,saat='13:00')
+  earned=session_earnings.report(self.m,self.today[:7],tid)
+  self.assertEqual(earned['toplam_seans'],1)
+  self.assertEqual(earned['ilk_80'][0]['terapist_id'],tid)
+  self.assertEqual(earned['ilk_80'][0]['terapist_kazanci'],320)
+ def test_simplified_client_update_preserves_existing_details(self):
+  self.call('danisan_guncelle',{'id':self.a,'tani':'Önceki bilgi','tckn':'12345678901'})
+  self.call('danisan_guncelle',{'id':self.a,'telefon':'5550000000','terapist_id':3})
+  client=self.call('danisan_detay',self.a)
+  self.assertEqual(client['tani'],'Önceki bilgi')
+  self.assertEqual(client['tckn'],'12345678901')
+  self.assertEqual(client['terapist_id'],3)
  def test_same_service_multiple_therapists_and_report(self):
   self.call('service_manage',{'id':1,'terapist_ids':[1,2]});a=self.sess();b=self.sess(terapist_id=2,hizmet_id=1,saat='11:00')
   self.assertEqual(self.call('seans_detay',b)['hizmet_id'],1)
