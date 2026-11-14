@@ -12,6 +12,10 @@ await vm.runInContext("openEditor('danisanlar',{})",ctx);fields=nodes.get('field
 fixture.boot.odalar.push({id:1,ad:'Oda 1',kategori:'uygulama',aktif:1});
 await vm.runInContext("openEditor('seanslar',{})",ctx);fields=nodes.get('fields').innerHTML;assert(fields.includes('name="oda_id" value="3"'));assert(!fields.includes('Oda 1'));
 await vm.runInContext("action('therapist-new','')",ctx);fields=nodes.get('fields').innerHTML;assert(fields.includes('value="Pilates"'));
+vm.runInContext("state.calendarItems=[{id:12,kaynak:'planli',danisan_id:1,danisan_adi:'Ayşe Test',terapist_id:1,hizmet_id:1,tarih:'2026-01-05',saat:'10:00'}]",ctx);
+fixture.boot.hizmetler.push({id:11,terapist_id:1,terapist_ids:[1,2],alan_adi:'Pilates',kategori:'pilates',aktif:1});
+ctx.openTherapistChange(0,'session');assert(nodes.get('therapist-change').open);assert(nodes.get('therapist-change-note').textContent.includes('Yalnız seçili tarihteki'));assert(nodes.get('therapist-change-id').innerHTML.includes('B İki'));
+ctx.openTherapistChange(0,'client');assert(nodes.get('therapist-change-note').textContent.includes('birincil terapisti'));nodes.get('therapist-change').close();
 await vm.runInContext("openProgram({danisan_id:1,terapist_id:2,hizmet_id:1})",ctx);vm.runInContext("$('f-pg-package').value='';state.page='planlar';programServices(1)",ctx);assert(!nodes.get('f-pg-service').innerHTML.includes('Ortak'));
 const menu=vm.runInContext("renderList('hizmetler',fixture.boot.hizmetler)",ctx);assert(menu.includes('Yönet'));assert(menu.includes('Terapistleri seç'));
 const packages=vm.runInContext("renderList('paketler',fixture.data.paketler)",ctx);assert(packages.includes('package-delete-direct'));assert(packages.includes('Düzenle'));

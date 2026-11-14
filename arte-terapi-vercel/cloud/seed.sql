@@ -85,6 +85,7 @@ CREATE TABLE haftalik_program_sablonlari (
         FOREIGN KEY(hizmet_id) REFERENCES hizmet_alanlari(id),
         FOREIGN KEY(oda_id) REFERENCES odalar(id)
     );
+CREATE TABLE program_seans_terapistleri(plan_id INTEGER NOT NULL REFERENCES haftalik_program_sablonlari(id) ON DELETE CASCADE,tarih TEXT NOT NULL,terapist_id INTEGER NOT NULL REFERENCES terapistler(id),PRIMARY KEY(plan_id,tarih));
 CREATE TABLE hizmet_alanlari (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         terapist_id INTEGER NOT NULL,
@@ -295,7 +296,7 @@ INSERT INTO "ayarlar" VALUES('ozel_renk','#f5b800');
 INSERT INTO "ayarlar" VALUES('db_path','/tmp/tmpyjoaw139/seed.db');
 INSERT INTO "ayarlar" VALUES('schema_370_initialized','1');
 INSERT INTO "ayarlar" VALUES('schema_390','1');
-INSERT INTO "ayarlar" VALUES('app_version','3.18.0');
+INSERT INTO "ayarlar" VALUES('app_version','3.19.0');
 INSERT INTO "ayarlar" VALUES('schema_3100','1');
 INSERT INTO "ayarlar" VALUES('schema_3110','1');
 INSERT INTO "ayarlar" VALUES('schema_3120','1');

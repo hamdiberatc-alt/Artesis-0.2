@@ -1,4 +1,4 @@
-# Arte Terapi — Vercel bulut sürümü 3.18.0
+# Arte Terapi — Vercel bulut sürümü 3.19.0
 
 Danışan, pilates paketleri, kişi bazlı ödemeler, haftalık program, ölçümler ve raporlar için Vercel + Turso **libSQL** sürümü. Python 3.12+ kullanır; ek Python paketi gerekmez.
 
