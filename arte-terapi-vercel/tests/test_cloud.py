@@ -24,18 +24,19 @@ from cloud import db
 class SchemaUpgradeTest(unittest.TestCase):
     def test_existing_cloud_schema_gains_makeup_plan_columns(self):
         from cloud.runtime import ensure_schema
-        for version in ('1','2','3'):
+        for version in ('1','2','3','4'):
             with self.subTest(version=version):
                 c=sqlite3.connect(':memory:')
                 try:
                     c.execute('CREATE TABLE cloud_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
-                    c.execute('CREATE TABLE seanslar(id INTEGER PRIMARY KEY'+(',telafi_kaynak_id INTEGER' if version in ('2','3') else '')+')')
+                    c.execute('CREATE TABLE seanslar(id INTEGER PRIMARY KEY'+(',telafi_kaynak_id INTEGER' if version in ('2','3','4') else '')+(',telafi_plan_tarihi TEXT,telafi_plan_saat TEXT' if version=='4' else '')+')')
                     c.execute("INSERT INTO cloud_meta VALUES('version',?)",(version,))
                     c.commit()
                     ensure_schema(c,lambda:'unused')
                     cols={r[1] for r in c.execute('PRAGMA table_info(seanslar)')}
                     self.assertTrue({'telafi_kaynak_id','telafi_plan_tarihi','telafi_plan_saat'}<=cols)
-                    self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'4')
+                    self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'5')
+                    self.assertIsNotNone(c.execute("SELECT name FROM sqlite_master WHERE name='program_seans_terapistleri'").fetchone())
                 finally:c.close()
 from cloud.runtime import ensure_schema, export_backup
 

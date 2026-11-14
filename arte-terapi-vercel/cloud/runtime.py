@@ -18,8 +18,9 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS cloud_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cloud_pdf_chunks(report_id INTEGER NOT NULL REFERENCES danisan_rapor_dosyalari(id) ON DELETE CASCADE,part INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(report_id,part));
 CREATE TABLE IF NOT EXISTS cloud_rate_limits(key TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS program_seans_terapistleri(plan_id INTEGER NOT NULL REFERENCES haftalik_program_sablonlari(id) ON DELETE CASCADE,tarih TEXT NOT NULL,terapist_id INTEGER NOT NULL REFERENCES terapistler(id),PRIMARY KEY(plan_id,tarih));
 '''
-CLOUD_VERSION = '4'
+CLOUD_VERSION = '5'
 PDF_LIMIT = 2 * 1024 * 1024
 
 
@@ -28,17 +29,22 @@ def ensure_schema(c, password_hash, upgrade=None):
     # A new serverless worker must not take a writer lock on an installed DB.
     if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_meta'").fetchone():
         version = c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()
-        if version and version[0] in ('1','2','3'):
+        if version and version[0] in ('1','2','3','4'):
             c.execute('BEGIN IMMEDIATE')
             try:
-                columns = {row[1] for row in c.execute('PRAGMA table_info(seanslar)')}
-                if 'telafi_kaynak_id' not in columns:
-                    c.execute('ALTER TABLE seanslar ADD COLUMN telafi_kaynak_id INTEGER REFERENCES seanslar(id)')
-                if 'telafi_plan_tarihi' not in columns:
-                    c.execute("ALTER TABLE seanslar ADD COLUMN telafi_plan_tarihi TEXT DEFAULT ''")
-                if 'telafi_plan_saat' not in columns:
-                    c.execute("ALTER TABLE seanslar ADD COLUMN telafi_plan_saat TEXT DEFAULT ''")
-                if upgrade:upgrade(c)
+                if version[0] in ('1','2','3'):
+                    columns = {row[1] for row in c.execute('PRAGMA table_info(seanslar)')}
+                    if 'telafi_kaynak_id' not in columns:
+                        c.execute('ALTER TABLE seanslar ADD COLUMN telafi_kaynak_id INTEGER REFERENCES seanslar(id)')
+                    if 'telafi_plan_tarihi' not in columns:
+                        c.execute("ALTER TABLE seanslar ADD COLUMN telafi_plan_tarihi TEXT DEFAULT ''")
+                    if 'telafi_plan_saat' not in columns:
+                        c.execute("ALTER TABLE seanslar ADD COLUMN telafi_plan_saat TEXT DEFAULT ''")
+                    if upgrade:upgrade(c)
+                c.execute('''CREATE TABLE IF NOT EXISTS program_seans_terapistleri(
+                    plan_id INTEGER NOT NULL REFERENCES haftalik_program_sablonlari(id) ON DELETE CASCADE,
+                    tarih TEXT NOT NULL,terapist_id INTEGER NOT NULL REFERENCES terapistler(id),
+                    PRIMARY KEY(plan_id,tarih))''')
                 c.execute("UPDATE cloud_meta SET value=? WHERE key='version'", (CLOUD_VERSION,))
                 c.commit()
             except Exception:
@@ -190,7 +196,7 @@ def install(app):
     original_html = app['build_html']
     @lru_cache(maxsize=1)
     def cloud_html():
-        return original_html().replace('v3.13.0', 'v3.14.0 Bulut').replace('Yedek indir', 'Yedekleme').replace('en çok 10 MB', 'en çok 2 MB').replace('f.size>10*1024*1024', 'f.size>2*1024*1024').replace('PDF en çok 10 MB olabilir.', 'PDF en çok 2 MB olabilir.').replace('Sürüm geçişinden önce otomatik yedek alınır.', 'Bulut tam yedeği bilgisayardaki yedekleme aracıyla alınır; kurulum rehberini izleyin.')
+        return original_html().replace('v3.19.0', 'v3.19.0 Bulut').replace('Yedek indir', 'Yedekleme').replace('en çok 10 MB', 'en çok 2 MB').replace('f.size>10*1024*1024', 'f.size>2*1024*1024').replace('PDF en çok 10 MB olabilir.', 'PDF en çok 2 MB olabilir.').replace('Sürüm geçişinden önce otomatik yedek alınır.', 'Bulut tam yedeği bilgisayardaki yedekleme aracıyla alınır; kurulum rehberini izleyin.')
     app['build_html'] = cloud_html
     original = app['Handler']
     class CloudHandler(original):
