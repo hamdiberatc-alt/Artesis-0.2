@@ -1902,13 +1902,66 @@ def danisan_ekle(d):
         _danisan_terapistleri_yaz(c,did,d['terapist_id'],d.get('terapist_ids') or [])
         return did
 
+def _danisan_program_terapistini_aktar(c,did,tid,effective):
+    plans=q(c,'''SELECT p.* FROM haftalik_program_sablonlari p
+        JOIN hizmet_alanlari h ON h.id=p.hizmet_id AND h.kategori='pilates'
+        WHERE p.danisan_id=? AND p.aktif=1
+        AND (p.bitis IS NULL OR p.bitis='' OR p.bitis>=?) ORDER BY p.id''',(did,effective))
+    previous=(date.fromisoformat(effective)-timedelta(days=1)).isoformat()
+    programs={}
+    for plan in plans:
+        begin=max(effective,plan.get('baslangic') or effective)
+        package=c.execute('SELECT grup_id FROM pilates_paketleri WHERE id=?',(plan.get('paket_id'),)).fetchone()
+        group_id=package['grup_id'] if package else None
+        for other in q(c,'''SELECT * FROM haftalik_program_sablonlari WHERE terapist_id=? AND danisan_id<>?
+            AND gun_index=? AND aktif=1 AND (bitis IS NULL OR bitis='' OR bitis>=?)''',
+            (tid,did,plan['gun_index'],begin)):
+            if (not plan['bitis'] or not other['baslangic'] or other['baslangic']<=plan['bitis']) and _aralik_cakisiyor(plan['saat'],plan['sure_dk'],other['saat'],other['sure_dk']):
+                other_package=c.execute('SELECT grup_id FROM pilates_paketleri WHERE id=?',(other.get('paket_id'),)).fetchone()
+                if group_id and other_package and other_package['grup_id']==group_id and all(plan[k]==other[k] for k in ('saat','sure_dk','oda_id','hizmet_id','grup_turu')):continue
+                raise ValueError('Yeni terapistin '+WEEKDAY_NAMES[plan['gun_index']]+' '+plan['saat']+' saatinde başka programı var.')
+        for session in q(c,'SELECT * FROM seanslar WHERE terapist_id=? AND tarih>=? AND gelmedi=0',(tid,begin)):
+            if date.fromisoformat(session['tarih']).weekday()==plan['gun_index'] and (not plan['bitis'] or session['tarih']<=plan['bitis']) and _aralik_cakisiyor(plan['saat'],plan['sure_dk'],session['saat'],session['sure_dk']):
+                raise ValueError('Yeni terapistin '+session['tarih']+' '+session['saat']+' saatinde kayıtlı seansı var.')
+        if plan.get('baslangic') and plan['baslangic']>=effective:
+            c.execute('UPDATE haftalik_program_sablonlari SET terapist_id=? WHERE id=?',(tid,plan['id']))
+        else:
+            c.execute('UPDATE haftalik_program_sablonlari SET bitis=? WHERE id=?',(previous,plan['id']))
+            program=programs.setdefault(plan.get('program_id') or str(plan['id']),secrets.token_hex(16))
+            c.execute('''INSERT INTO haftalik_program_sablonlari
+                (danisan_id,terapist_id,hizmet_id,gun_index,saat,sure_dk,oda_id,aktif,notlar,grup_turu,program_id,paket_id,baslangic,bitis)
+                VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)''',
+                (did,tid,plan['hizmet_id'],plan['gun_index'],plan['saat'],plan['sure_dk'],plan['oda_id'],
+                 plan['notlar'],plan['grup_turu'],program,plan['paket_id'],effective,plan['bitis']))
+
 def danisan_guncelle(d):
     with transaction() as c:
         old=exists(c,'danisanlar',d.get('id'),'Danışan');v={**old,**d}
         exists(c,'terapistler',v['terapist_id'],'Terapist');v['ad']=required(v['ad'],'Ad')
         if v.get('dogum_tarihi'):valid_date(v['dogum_tarihi'])
+        changed=int(v['terapist_id'])!=old['terapist_id']
+        if changed:
+            current=exists(c,'terapistler',v['terapist_id'],'Terapist')
+            if not current['aktif']:raise ValueError('Aktif terapist seçin.')
+            plans=q(c,'''SELECT DISTINCT p.hizmet_id,h.alan_adi FROM haftalik_program_sablonlari p
+                JOIN hizmet_alanlari h ON h.id=p.hizmet_id
+                WHERE p.danisan_id=? AND p.aktif=1 AND h.kategori='pilates'
+                AND (p.bitis IS NULL OR p.bitis='' OR p.bitis>=?)''',
+                (old['id'],date.today().isoformat()))
+            plans+=q(c,'''SELECT DISTINCT s.hizmet_id,h.alan_adi FROM seanslar s
+                JOIN hizmet_alanlari h ON h.id=s.hizmet_id
+                WHERE s.danisan_id=? AND h.kategori='pilates' AND s.gelmedi_nedeni='Telafi bekliyor'
+                AND s.telafi_plan_tarihi>=?''',(old['id'],date.today().isoformat()))
+            for plan in plans:
+                if not service_allows(c,plan['hizmet_id'],v['terapist_id']):
+                    raise ValueError('Yeni terapisti önce '+plan['alan_adi']+' hizmetine atayın.')
         fields=['terapist_id','ad','soyad','telefon','email','dogum_tarihi','tckn','cinsiyet','meslek','tani','sikayet','hedefler','notlar','aktif']
         c.execute('UPDATE danisanlar SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',[v[f] for f in fields]+[d['id']])
+        if changed:
+            c.execute('''INSERT INTO danisan_terapist_degisimleri(danisan_id,tarih,terapist_id)
+                VALUES(?,?,?) ON CONFLICT(danisan_id,tarih) DO UPDATE SET terapist_id=excluded.terapist_id''',
+                (old['id'],date.today().isoformat(),int(v['terapist_id'])))
+            _danisan_program_terapistini_aktar(c,old['id'],int(v['terapist_id']),date.today().isoformat())
         ids=d.get('terapist_ids')
         if ids is None:ids=[r['terapist_id'] for r in q(c,'SELECT terapist_id FROM danisan_terapistler WHERE danisan_id=?',(d['id'],))]
         _danisan_terapistleri_yaz(c,d['id'],v['terapist_id'],ids)
@@ -2071,7 +2124,9 @@ def _yenilenen_programu_aktar(c,p):
     remaining=previous['seans_sayisi']+previous['hediye_seans']-used
     begin=p['baslangic'] if remaining<=0 or previous['bitis']<p['baslangic'] else max(p['baslangic'],(date.fromisoformat(previous['bitis'])+timedelta(days=1)).isoformat())
     if begin>p['bitis']:return
-    plans=q(c,'SELECT * FROM haftalik_program_sablonlari WHERE paket_id=? AND aktif=1 ORDER BY id',(previous['id'],))
+    plans=q(c,'''SELECT * FROM haftalik_program_sablonlari WHERE paket_id=? AND aktif=1
+        AND (bitis IS NULL OR bitis='' OR bitis=(SELECT MAX(bitis) FROM haftalik_program_sablonlari
+        WHERE paket_id=? AND aktif=1)) ORDER BY id''',(previous['id'],previous['id']))
     programs={}
     for plan in plans:
         first=max(begin,plan.get('baslangic') or begin)
@@ -2322,10 +2377,10 @@ def seans_haftalik_programi(week_start=None,terapist_id=None):
         rows=q(c,'''SELECT s.*,d.ad||' '||d.soyad danisan_adi,t.ad terapist_adi,h.alan_adi hizmet_adi,
             EXISTS(SELECT 1 FROM seanslar made WHERE made.telafi_kaynak_id=s.id) telafi_yapildi
             FROM seanslar s JOIN danisanlar d ON d.id=s.danisan_id JOIN terapistler t ON t.id=s.terapist_id LEFT JOIN hizmet_alanlari h ON h.id=s.hizmet_id WHERE (s.tarih BETWEEN ? AND ? OR s.plan_tarihi BETWEEN ? AND ?)'''+(' AND s.terapist_id=?' if terapist_id else ''),[mon.isoformat(),sun.isoformat(),mon.isoformat(),sun.isoformat()]+([terapist_id] if terapist_id else []))
-        keys={(r['tarih'],r['danisan_id'],r['terapist_id'],r['saat']) for r in rows}
+        keys={(r['tarih'],r['danisan_id'],r['saat']) for r in rows}
         for r in rows:
-            if r.get('plan_tarihi') and r.get('planlanan_saat'):keys.add((r['plan_tarihi'],r['danisan_id'],r['terapist_id'],r['planlanan_saat']))
-        for r in q(c,"SELECT * FROM randevular WHERE durum='iptal' AND tarih BETWEEN ? AND ?",(mon.isoformat(),sun.isoformat())):keys.add((r['tarih'],r['danisan_id'],r['terapist_id'],r['saat']))
+            if r.get('plan_tarihi') and r.get('planlanan_saat'):keys.add((r['plan_tarihi'],r['danisan_id'],r['planlanan_saat']))
+        for r in q(c,"SELECT * FROM randevular WHERE durum='iptal' AND tarih BETWEEN ? AND ?",(mon.isoformat(),sun.isoformat())):keys.add((r['tarih'],r['danisan_id'],r['saat']))
         rows=[r for r in rows if mon.isoformat()<=r['tarih']<=sun.isoformat()]
         for r in rows:r['kaynak']='gerceklesen'
         makeups=q(c,'''SELECT s.*,d.ad||' '||d.soyad danisan_adi,t.ad terapist_adi,h.alan_adi hizmet_adi
@@ -2336,14 +2391,14 @@ def seans_haftalik_programi(week_start=None,terapist_id=None):
             (' AND s.terapist_id=?' if terapist_id else ''),
             [mon.isoformat(),sun.isoformat()]+([terapist_id] if terapist_id else []))
         for r in makeups:
-            keys.add((r['telafi_plan_tarihi'],r['danisan_id'],r['terapist_id'],r['telafi_plan_saat']))
+            keys.add((r['telafi_plan_tarihi'],r['danisan_id'],r['telafi_plan_saat']))
             rows.append({**r,'tarih':r['telafi_plan_tarihi'],'saat':r['telafi_plan_saat'],
                          'kaynak':'telafi_planli','tip':'telafi','gelmedi':0,'hak_dustu':0,
                          'telafi_kaynak_id':r['id'],'telafi_kaynak_tarihi':r['tarih']})
         plans=haftalik_program_sablonlari_listesi(terapist_id,mon.isoformat(),sun.isoformat())
         for p in plans:
             dt=(mon+timedelta(days=p['gun_index'])).isoformat()
-            if (not p.get('baslangic') or dt>=p['baslangic']) and (not p.get('bitis') or dt<=p['bitis']) and (dt,p['danisan_id'],p['terapist_id'],p['saat']) not in keys:
+            if (not p.get('baslangic') or dt>=p['baslangic']) and (not p.get('bitis') or dt<=p['bitis']) and (dt,p['danisan_id'],p['saat']) not in keys:
                 rows.append({**p,'paket_id':_program_paketi(c,p,dt) if p.get('paket_id') else None,
                              'tarih':dt,'kaynak':'planli','tip':'normal'})
         rows.sort(key=lambda x:(x['tarih'],x.get('saat') or ''))
@@ -2366,8 +2421,10 @@ _PLAN_SAVE=haftalik_program_kaydet
 def haftalik_program_kaydet(d):
     d=dict(d);d['saat']=valid_time(d.get('saat'));d['gun_index']=integer(d.get('gun_index'),0,6);d['sure_dk']=integer(d.get('sure_dk',45),5,480)
     with transaction() as c:
-        exists(c,'danisanlar',d.get('danisan_id'),'Danışan');exists(c,'terapistler',d.get('terapist_id'),'Terapist')
+        client=exists(c,'danisanlar',d.get('danisan_id'),'Danışan');exists(c,'terapistler',d.get('terapist_id'),'Terapist')
         h=exists(c,'hizmet_alanlari',d.get('hizmet_id'),'Hizmet')
+        if h['kategori']=='pilates' and c.execute('SELECT 1 FROM danisan_terapist_degisimleri WHERE danisan_id=?',(client['id'],)).fetchone() and int(d['terapist_id'])!=client['terapist_id']:
+            raise ValueError('Pilates programında danışanın güncel terapistini kullanın.')
         if not service_allows(c,h['id'],d['terapist_id']):raise ValueError('Seçilen terapist bu hizmete atanmamış.')
         if d.get('oda_id') and not exists(c,'odalar',d['oda_id'],'Oda')['aktif']:raise ValueError('Oda pasif.')
     pid=_PLAN_SAVE(d)
@@ -2932,6 +2989,9 @@ def program_kaydet(d):
             for table,ident in [('danisanlar',did),('terapistler',tid),('hizmet_alanlari',hid)]:
                 if not exists(c,table,ident)['aktif']:raise ValueError('Üye, terapist ve hizmet aktif olmalıdır.')
             h=exists(c,'hizmet_alanlari',hid)
+            client=exists(c,'danisanlar',did)
+            if h['kategori']=='pilates' and c.execute('SELECT 1 FROM danisan_terapist_degisimleri WHERE danisan_id=?',(did,)).fetchone() and tid!=client['terapist_id']:
+                raise ValueError('Pilates programında danışanın güncel terapistini kullanın.')
             if not service_allows(c,h['id'],tid):raise ValueError('Seçilen terapist bu hizmete atanmamış.')
             group=d.get('grup_turu','bireysel')
             if group not in ('bireysel','grup2','grup3'):raise ValueError('Grup seçimi geçersiz.')
@@ -3484,8 +3544,9 @@ _PACKAGE_319=paket_kaydet
 
 def _yenilenen_programu_uzat(c,paket,baslangic,bitis):
     if bitis<=paket['bitis']:return
-    plans=q(c,"SELECT * FROM haftalik_program_sablonlari WHERE paket_id=? AND aktif=1 AND bitis<>'' AND bitis<=? ORDER BY id",
-            (paket['id'],paket['bitis']))
+    plans=q(c,'''SELECT * FROM haftalik_program_sablonlari WHERE paket_id=? AND aktif=1
+        AND bitis<>'' AND bitis=(SELECT MAX(bitis) FROM haftalik_program_sablonlari
+        WHERE paket_id=? AND aktif=1) ORDER BY id''',(paket['id'],paket['id']))
     if baslangic<=(date.fromisoformat(paket['bitis'])+timedelta(days=1)).isoformat():
         for plan in plans:
             c.execute('UPDATE haftalik_program_sablonlari SET bitis=? WHERE id=?',(bitis,plan['id']))
@@ -3742,15 +3803,26 @@ def init_db():
                 baslangic TEXT NOT NULL, bitis TEXT NOT NULL,
                 fiyat REAL NOT NULL, seans_sayisi INTEGER NOT NULL,
                 hediye_seans INTEGER NOT NULL DEFAULT 0)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS danisan_terapist_degisimleri(
+                danisan_id INTEGER NOT NULL REFERENCES danisanlar(id) ON DELETE CASCADE,
+                tarih TEXT NOT NULL,
+                terapist_id INTEGER NOT NULL REFERENCES terapistler(id),
+                PRIMARY KEY(danisan_id,tarih))''')
             c.execute("INSERT OR REPLACE INTO ayarlar VALUES('app_version',?)",(APP_VERSION,))
 
 def seans_haftalik_programi(week_start=None,terapist_id=None):
     data=_WEEK_318(week_start)
     c=get_db()
     try:
+        pilates_ids={r['id'] for r in q(c,"SELECT id FROM hizmet_alanlari WHERE kategori='pilates'")}
         changes={(r['plan_id'],r['tarih']):r for r in q(c,'''SELECT x.plan_id,x.tarih,x.terapist_id,t.ad,t.soyad
             FROM program_seans_terapistleri x JOIN terapistler t ON t.id=x.terapist_id
             WHERE x.tarih BETWEEN ? AND ?''',(data['week_start'],data['week_end']))}
+        history={}
+        for r in q(c,'''SELECT x.danisan_id,x.tarih,x.terapist_id,t.ad,t.soyad
+            FROM danisan_terapist_degisimleri x JOIN terapistler t ON t.id=x.terapist_id
+            WHERE x.tarih<=? ORDER BY x.danisan_id,x.tarih''',(data['week_end'],)):
+            history.setdefault(r['danisan_id'],[]).append(r)
     finally:c.close()
     recorded={(r.get('plan_tarihi'),str(r.get('program_id') or ''),r.get('planlanan_saat'),r['danisan_id'])
               for r in data['items'] if r.get('kaynak')=='gerceklesen' and r.get('program_id') and r.get('plan_tarihi')}
@@ -3758,50 +3830,13 @@ def seans_haftalik_programi(week_start=None,terapist_id=None):
     for row in data['items']:
         if row['kaynak']=='planli':
             if (row['tarih'],str(row.get('program_id') or ''),row['saat'],row['danisan_id']) in recorded:continue
-            change=changes.get((row['id'],row['tarih']))
+        if row['kaynak'] in ('planli','telafi_planli') and row['hizmet_id'] in pilates_ids:
+            change=next((r for r in reversed(history.get(row['danisan_id'],[])) if r['tarih']<=row['tarih']),None)
+            if not change and row['kaynak']=='planli':change=changes.get((row['id'],row['tarih']))
             if change:row={**row,'terapist_id':change['terapist_id'],'terapist_adi':(change['ad']+' '+(change['soyad'] or '')).strip()}
         if not terapist_id or str(row['terapist_id'])==str(terapist_id):items.append(row)
     data['items']=items
     return data
-
-def program_seans_terapist_degistir(d):
-    ids=d.get('plan_ids')
-    if not isinstance(ids,list) or not 1<=len(ids)<=3:raise ValueError('1–3 plan satırı seçin.')
-    ids=list(dict.fromkeys(integer(x,1) for x in ids))
-    day=valid_date(d.get('tarih'));tid=integer(d.get('terapist_id'),1)
-    with transaction() as c:
-        therapist=exists(c,'terapistler',tid,'Terapist')
-        if not therapist['aktif']:raise ValueError('Aktif terapist seçin.')
-        initial=exists(c,'haftalik_program_sablonlari',ids[0],'Program')
-        if initial['grup_turu'] in ('grup2','grup3') and initial.get('paket_id'):
-            package=exists(c,'pilates_paketleri',initial['paket_id'],'Paket')
-            if package.get('grup_id'):
-                ids=[r['id'] for r in q(c,'''SELECT p.id FROM haftalik_program_sablonlari p
-                    JOIN pilates_paketleri pack ON pack.id=p.paket_id
-                    WHERE pack.grup_id=? AND p.aktif=1 AND p.gun_index=? AND p.saat=?
-                    AND p.hizmet_id=? AND p.terapist_id=? AND p.grup_turu=?
-                    AND (p.baslangic='' OR p.baslangic<=?) AND (p.bitis='' OR p.bitis>=?)''',
-                    (package['grup_id'],initial['gun_index'],initial['saat'],initial['hizmet_id'],initial['terapist_id'],initial['grup_turu'],day,day))]
-        plans=[exists(c,'haftalik_program_sablonlari',pid,'Program') for pid in ids]
-        first=plans[0]
-        for p in plans:
-            if not p['aktif'] or date.fromisoformat(day).weekday()!=p['gun_index'] or (p['baslangic'] and day<p['baslangic']) or (p['bitis'] and day>p['bitis']):raise ValueError('Seçilen tarihte aktif program bulunamadı.')
-            if any(p[k]!=first[k] for k in ('saat','hizmet_id','oda_id','sure_dk','grup_turu','terapist_id')):raise ValueError('Farklı seanslar birlikte değiştirilemez.')
-            if not service_allows(c,p['hizmet_id'],tid):raise ValueError('Seçilen terapist Pilates hizmetine atanmalı.')
-            if c.execute('''SELECT 1 FROM seanslar WHERE danisan_id=? AND tarih=? AND saat=?
-                AND (program_id=? OR terapist_id=?)''',(p['danisan_id'],day,p['saat'],p['program_id'],p['terapist_id'])).fetchone():
-                raise ValueError('Seans kaydedilmiş; gerçekleşen seansın terapistini düzenleyin.')
-        if len(ids)>1 and first['grup_turu']=='bireysel':raise ValueError('Bireysel seans tek başına değiştirilir.')
-        if tid!=first['terapist_id']:
-            for s in q(c,'SELECT * FROM seanslar WHERE terapist_id=? AND tarih=? AND gelmedi=0',(tid,day)):
-                if _aralik_cakisiyor(first['saat'],first['sure_dk'],s['saat'],s['sure_dk']):raise ValueError('Terapistin bu saatte başka seansı var.')
-            for p in q(c,'SELECT * FROM haftalik_program_sablonlari WHERE terapist_id=? AND gun_index=? AND aktif=1',(tid,date.fromisoformat(day).weekday())):
-                if p['id'] not in ids and (not p['baslangic'] or day>=p['baslangic']) and (not p['bitis'] or day<=p['bitis']) and _aralik_cakisiyor(first['saat'],first['sure_dk'],p['saat'],p['sure_dk']):raise ValueError('Terapistin bu saatte başka programı var.')
-        for pid in ids:
-            if tid==first['terapist_id']:c.execute('DELETE FROM program_seans_terapistleri WHERE plan_id=? AND tarih=?',(pid,day))
-            else:c.execute('''INSERT INTO program_seans_terapistleri VALUES(?,?,?)
-                ON CONFLICT(plan_id,tarih) DO UPDATE SET terapist_id=excluded.terapist_id''',(pid,day,tid))
-    return {'plan_ids':ids,'tarih':day,'terapist_id':tid}
 
 def kayitli_seans_terapist_degistir(d):
     sid=integer(d.get('seans_id'),1);tid=integer(d.get('terapist_id'),1)
@@ -3821,11 +3856,10 @@ def kayitli_seans_terapist_degistir(d):
 
 _SAVE_318=_save_kind
 def _save_kind(kind,d):
-    if kind=='program_seans_terapisti':return program_seans_terapist_degistir(d)
     if kind=='kayitli_seans_terapisti':return kayitli_seans_terapist_degistir(d)
     return _SAVE_318(kind,d)
 
-APP_VERSION='3.20.0'
+APP_VERSION='3.21.0'
 
 if CLOUD_MODE:
     from cloud.runtime import install
