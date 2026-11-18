@@ -18,7 +18,8 @@ class PackageRenewalTest(unittest.TestCase):
         second=self.sess(terapist_id=3,hizmet_id=11,paket_id=old,saat='10:00')
         self.call('_save_record','terapistler',{'ad':'İkinci Pilates','uzmanlik':'Pilates','aktif':1})
         self.call('danisan_guncelle',{'id':self.a,'terapist_id':4})
-        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_kazanc'],240)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_kazanc'],0)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_kazanc'],240)
         renewed=self.call('paket_kaydet',{'danisan_id':self.a,'ad':'Yeni alım','fiyat':600,
             'seans_sayisi':3,'hediye_seans':0,'baslangic':self.today,
             'bitis':(date.today()+timedelta(days=90)).isoformat(),
@@ -29,9 +30,9 @@ class PackageRenewalTest(unittest.TestCase):
         self.assertEqual(package['sonraki_seans_ucreti'],200)
         self.assertEqual([r['ucret'] for r in self.rows('SELECT ucret FROM seanslar ORDER BY id')],[300,300])
         self.sess(terapist_id=4,hizmet_id=11,paket_id=old,saat='11:00')
-        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_kazanc'],240)
-        self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_kazanc'],80)
-        self.assertEqual(self.call('seans_detay',first)['terapist_id'],3)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_kazanc'],0)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_kazanc'],320)
+        self.assertEqual(self.call('seans_detay',first)['terapist_id'],4)
         self.assertEqual(self.call('seans_detay',second)['ucret'],300)
         with self.assertRaises(ValueError):
             self.call('paket_kaydet',{'id':old,'fiyat':1300})

@@ -1934,6 +1934,27 @@ def _danisan_program_terapistini_aktar(c,did,tid,effective):
                 (did,tid,plan['hizmet_id'],plan['gun_index'],plan['saat'],plan['sure_dk'],plan['oda_id'],
                  plan['notlar'],plan['grup_turu'],program,plan['paket_id'],effective,plan['bitis']))
 
+def _pilates_seans_terapistlerini_uzlastir(c,danisan_id=None):
+    """Apply dated client assignments to recorded Pilates sessions and linked receipts."""
+    sql='''SELECT s.id,s.terapist_id AS eski_terapist_id,
+        (SELECT x.terapist_id FROM danisan_terapist_degisimleri x
+         WHERE x.danisan_id=s.danisan_id AND x.tarih<=s.tarih
+         ORDER BY x.tarih DESC LIMIT 1) AS yeni_terapist_id
+        FROM seanslar s JOIN hizmet_alanlari h ON h.id=s.hizmet_id
+        WHERE h.kategori='pilates' '''
+    params=[]
+    if danisan_id is not None:
+        sql+=' AND s.danisan_id=?'
+        params.append(danisan_id)
+    changed=0
+    for row in q(c,sql,params):
+        if row['yeni_terapist_id'] is None or row['yeni_terapist_id']==row['eski_terapist_id']:
+            continue
+        c.execute('UPDATE seanslar SET terapist_id=? WHERE id=?',(row['yeni_terapist_id'],row['id']))
+        c.execute('UPDATE odemeler SET terapist_id=? WHERE seans_id=?',(row['yeni_terapist_id'],row['id']))
+        changed+=1
+    return changed
+
 def danisan_guncelle(d):
     with transaction() as c:
         old=exists(c,'danisanlar',d.get('id'),'Danışan');v={**old,**d}
@@ -1962,6 +1983,7 @@ def danisan_guncelle(d):
                 VALUES(?,?,?) ON CONFLICT(danisan_id,tarih) DO UPDATE SET terapist_id=excluded.terapist_id''',
                 (old['id'],date.today().isoformat(),int(v['terapist_id'])))
             _danisan_program_terapistini_aktar(c,old['id'],int(v['terapist_id']),date.today().isoformat())
+            _pilates_seans_terapistlerini_uzlastir(c,old['id'])
         ids=d.get('terapist_ids')
         if ids is None:ids=[r['terapist_id'] for r in q(c,'SELECT terapist_id FROM danisan_terapistler WHERE danisan_id=?',(d['id'],))]
         _danisan_terapistleri_yaz(c,d['id'],v['terapist_id'],ids)
@@ -2231,6 +2253,14 @@ def seans_kaydet(d):
         if not client['aktif'] or not therapist['aktif'] or not h['aktif']:raise ValueError('Danışan, terapist ve hizmet aktif olmalıdır.')
         if not service_allows(c,h['id'],tid) and not (old and old['terapist_id']==tid and old['hizmet_id']==h['id']):raise ValueError('Seçilen terapist bu hizmete atanmamış.')
         dt=valid_date(v.get('tarih'))
+        if h['kategori']=='pilates':
+            assignment=c.execute('''SELECT terapist_id FROM danisan_terapist_degisimleri
+                WHERE danisan_id=? AND tarih<=? ORDER BY tarih DESC LIMIT 1''',(did,dt)).fetchone()
+            if assignment and tid!=assignment[0]:
+                tid=assignment[0]
+                therapist=exists(c,'terapistler',tid,'Terapist')
+                if not therapist['aktif'] or not service_allows(c,h['id'],tid):
+                    raise ValueError('Danışanın atanmış terapisti bu Pilates hizmetinde aktif değil.')
         if not old and dt>date.today().isoformat() and not (flag(v.get('gelmedi')) and v.get('gelmedi_nedeni') in ('İptal edildi','Telafi bekliyor')):raise ValueError('Gelecek seansları haftalık programa ekleyin; katılımı seans gününde kaydedin.')
         st=valid_time(v.get('saat'));duration=integer(v.get('sure_dk',45),5,480)
         if _saat_dakika(st)+duration>1440:raise ValueError('Seans gece yarısını aşamaz.')
@@ -2290,6 +2320,8 @@ def seans_kaydet(d):
         values=[did,tid,h['id'],dt,st,duration,room,typ,group,ind,no,str(v.get('gelmedi_nedeni','')) if no else '',consumed,gift,pid,price,tp,ip,rate,agreed]+[str(soap.get(k,'')) for k in 'soap']
         if old:c.execute('UPDATE seanslar SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',values+[old['id']]);sid=old['id']
         else:sid=c.execute('INSERT INTO seanslar('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',values).lastrowid
+        if old and tid!=old['terapist_id']:
+            c.execute('UPDATE odemeler SET terapist_id=? WHERE seans_id=?',(tid,sid))
         c.execute('UPDATE seanslar SET telafi_kaynak_id=? WHERE id=?',(makeup_id,sid))
         if not no or v.get('gelmedi_nedeni')!='Telafi bekliyor':
             c.execute("UPDATE seanslar SET telafi_plan_tarihi='',telafi_plan_saat='' WHERE id=?",(sid,))
@@ -3859,7 +3891,17 @@ def _save_kind(kind,d):
     if kind=='kayitli_seans_terapisti':return kayitli_seans_terapist_degistir(d)
     return _SAVE_318(kind,d)
 
-APP_VERSION='3.21.1'
+APP_VERSION='3.21.2'
+_INIT_3211=init_db
+
+def init_db():
+    _INIT_3211()
+    with _INIT_LOCK:
+        with transaction() as c:
+            if not c.execute("SELECT 1 FROM ayarlar WHERE anahtar='schema_3212'").fetchone():
+                _pilates_seans_terapistlerini_uzlastir(c)
+                c.execute("INSERT INTO ayarlar(anahtar,deger) VALUES('schema_3212','1')")
+            c.execute("INSERT OR REPLACE INTO ayarlar(anahtar,deger) VALUES('app_version',?)",(APP_VERSION,))
 
 if CLOUD_MODE:
     from cloud.runtime import install

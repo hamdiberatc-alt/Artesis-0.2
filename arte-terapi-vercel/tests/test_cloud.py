@@ -35,7 +35,7 @@ class SchemaUpgradeTest(unittest.TestCase):
                     ensure_schema(c,lambda:'unused')
                     cols={r[1] for r in c.execute('PRAGMA table_info(seanslar)')}
                     self.assertTrue({'telafi_kaynak_id','telafi_plan_tarihi','telafi_plan_saat'}<=cols)
-                    self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'7')
+                    self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'8')
                     self.assertIsNotNone(c.execute("SELECT name FROM sqlite_master WHERE name='program_seans_terapistleri'").fetchone())
                     self.assertIsNotNone(c.execute("SELECT name FROM sqlite_master WHERE name='pilates_paket_yenilemeleri'").fetchone())
                     self.assertIsNotNone(c.execute("SELECT name FROM sqlite_master WHERE name='danisan_terapist_degisimleri'").fetchone())
