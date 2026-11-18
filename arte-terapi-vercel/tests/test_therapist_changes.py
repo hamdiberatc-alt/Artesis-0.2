@@ -3,6 +3,7 @@ from datetime import date, timedelta
 
 import test_core
 import session_earnings
+import payroll
 
 
 class TherapistChangeTest(unittest.TestCase):
@@ -40,13 +41,11 @@ class TherapistChangeTest(unittest.TestCase):
         self.assertEqual(len(same_day),1)
         self.assertEqual(same_day[0]['kaynak'],'gerceklesen')
 
-    def test_client_and_recorded_session_therapist_are_independent(self):
+    def test_client_change_moves_recorded_same_day_session_and_earnings(self):
         self.assertEqual(self.call('_save_record','terapistler',{'ad':'Yeni Pilates','uzmanlik':'Pilates','aktif':1}),4)
         pid=self.package()
         sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='14:00')
         self.call('danisan_guncelle',{'id':self.a,'terapist_id':4})
-        self.assertEqual(self.call('seans_detay',sid)['terapist_id'],3)
-        self.call('kayitli_seans_terapist_degistir',{'seans_id':sid,'terapist_id':4})
         self.assertEqual(self.call('seans_detay',sid)['terapist_id'],4)
         self.assertEqual(self.call('danisan_detay',self.a)['terapist_id'],4)
         self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_seans'],1)
@@ -77,17 +76,67 @@ class TherapistChangeTest(unittest.TestCase):
         self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_kazanc'],0)
         self.assertEqual(len([r for r in self.call('seans_haftalik_programi',self.today)['items'] if r['danisan_id']==self.a and r['saat']=='14:00']),1)
 
-    def test_recorded_session_keeps_original_therapist_after_change(self):
+    def test_recorded_same_day_session_moves_to_new_therapist(self):
         plan,pid=self._plan()
         sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='14:00',
             program_id=plan['program_id'],plan_tarihi=self.today,planlanan_saat='14:00')
         self.call('danisan_guncelle',{'id':self.a,'terapist_id':4})
-        self.assertEqual(self.call('seans_detay',sid)['terapist_id'],3)
-        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_kazanc'],320)
+        self.assertEqual(self.call('seans_detay',sid)['terapist_id'],4)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_kazanc'],0)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_kazanc'],320)
         same_day=[r for r in self.call('seans_haftalik_programi',self.today)['items'] if r['danisan_id']==self.a and r['saat']=='14:00']
         self.assertEqual(len(same_day),1)
         next_week=(date.today()+timedelta(days=7)).isoformat()
         self.assertEqual(next(r['terapist_id'] for r in self.call('seans_haftalik_programi',next_week)['items'] if r['kaynak']=='planli'),4)
+
+    def test_new_session_uses_client_assignment_after_change(self):
+        _,pid=self._plan()
+        self.call('danisan_guncelle',{'id':self.a,'terapist_id':4})
+        sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='08:00')
+        self.assertEqual(self.call('seans_detay',sid)['terapist_id'],4)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_seans'],0)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_seans'],1)
+        self.assertEqual(payroll.report(self.m,self.today[:7],3)['terapistler'][0]['seans'],0)
+        self.assertEqual(payroll.report(self.m,self.today[:7],4)['terapistler'][0]['seans'],1)
+
+    def test_previous_day_stays_with_original_therapist(self):
+        self.call('_save_record','terapistler',{'ad':'Yeni Pilates','uzmanlik':'Pilates','aktif':1})
+        old_day=(date.today()-timedelta(days=1)).isoformat()
+        pid=self.call('paket_kaydet',{'danisan_id':self.a,'ad':'Dönem','fiyat':1200,
+            'seans_sayisi':4,'hediye_seans':0,'baslangic':old_day,
+            'bitis':(date.today()+timedelta(days=21)).isoformat()})
+        old_sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,tarih=old_day,saat='08:00')
+        today_sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='09:00')
+        with self.m['transaction']() as c:
+            c.execute('INSERT INTO odemeler(danisan_id,terapist_id,tarih,tutar,seans_id) VALUES(?,?,?,?,?)',
+                (self.a,3,self.today,300,today_sid))
+        self.call('danisan_guncelle',{'id':self.a,'terapist_id':4})
+        self.assertEqual(self.call('seans_detay',old_sid)['terapist_id'],3)
+        self.assertEqual(self.call('seans_detay',today_sid)['terapist_id'],4)
+        self.assertEqual(self.rows('SELECT terapist_id FROM odemeler WHERE seans_id=?',(today_sid,))[0]['terapist_id'],4)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_seans'],1)
+        self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_seans'],1)
+
+    def test_existing_change_is_reconciled_by_schema_upgrade(self):
+        from cloud.runtime import ensure_schema
+        self.call('_save_record','terapistler',{'ad':'Yeni Pilates','uzmanlik':'Pilates','aktif':1})
+        pid=self.package()
+        sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='08:00')
+        with self.m['transaction']() as c:
+            c.execute('INSERT INTO odemeler(danisan_id,terapist_id,tarih,tutar,seans_id) VALUES(?,?,?,?,?)',
+                (self.a,3,self.today,800,sid))
+        with self.m['transaction']() as c:
+            c.execute('CREATE TABLE cloud_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
+            c.execute("INSERT INTO cloud_meta VALUES('version','7')")
+            c.execute('UPDATE danisanlar SET terapist_id=4 WHERE id=?',(self.a,))
+            c.execute('INSERT INTO danisan_terapist_degisimleri VALUES(?,?,?)',(self.a,self.today,4))
+        c=self.call('get_db')
+        try:
+            ensure_schema(c,lambda:'unused',reconcile=self.m['_pilates_seans_terapistlerini_uzlastir'])
+            self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'8')
+        finally:c.close()
+        self.assertEqual(self.call('seans_detay',sid)['terapist_id'],4)
+        self.assertEqual(self.rows('SELECT terapist_id FROM odemeler WHERE seans_id=?',(sid,))[0]['terapist_id'],4)
 
     def test_renewal_copies_only_current_therapist_program(self):
         self.call('_save_record','terapistler',{'ad':'Yeni Pilates','uzmanlik':'Pilates','aktif':1})
