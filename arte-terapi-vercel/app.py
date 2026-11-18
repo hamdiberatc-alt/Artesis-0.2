@@ -1959,6 +1959,15 @@ def paketler_listesi(danisan_id=None):
         for r in rows:
             r['kalan']=max(0,r['seans_sayisi']-r['kullanilan'])+max(0,r['hediye_seans']-r['hediye_kullanilan'])
             r['bakiye']=round(max(0,r['fiyat']-r['tahsilat']),2)
+            latest=c.execute('SELECT * FROM pilates_paket_yenilemeleri WHERE paket_id=? ORDER BY id DESC LIMIT 1',(r['id'],)).fetchone()
+            r['yenileme_adedi']=c.execute('SELECT COUNT(*) FROM pilates_paket_yenilemeleri WHERE paket_id=?',(r['id'],)).fetchone()[0]
+            r['yenileme_fiyati']=latest['fiyat'] if latest else r['fiyat']
+            r['yenileme_seans_sayisi']=latest['seans_sayisi'] if latest else r['seans_sayisi']
+            r['yenileme_hediye_seans']=latest['hediye_seans'] if latest else r['hediye_seans']
+            r['yenileme_baslangic']=latest['baslangic'] if latest else r['baslangic']
+            r['yenileme_bitis']=latest['bitis'] if latest else r['bitis']
+            if r['kullanilan']<r['seans_sayisi']:
+                r['sonraki_seans_ucreti']=_paket_seans_ucreti(c,r,r['kullanilan'])
         return rows
     finally:c.close()
 
@@ -2036,6 +2045,18 @@ def _paket_seanslarini_yeniden_fiyatlandir(c,paket_id,toplam,seans_sayisi):
         if linked>amount+.005:raise ValueError('Paket hesabı güncellenemedi; bağlı seans tahsilatı yeni seans tutarını aşıyor.')
         c.execute('UPDATE seanslar SET ucret=?,terapist_payi=?,isletme_payi=?,anlasilan_ucret=? WHERE id=?',(amount,therapist,clinic,amount,row['id']))
         _sync_paid(c,row['id'])
+
+def _paket_seans_ucreti(c,paket,used):
+    """Price the next right from its purchase, without blending prior renewals."""
+    cycles=q(c,'SELECT fiyat,seans_sayisi FROM pilates_paket_yenilemeleri WHERE paket_id=? ORDER BY id',(paket['id'],))
+    if not cycles:cycles=[{'fiyat':paket['fiyat'],'seans_sayisi':paket['seans_sayisi']}]
+    for cycle in cycles:
+        count=cycle['seans_sayisi']
+        if used<count:
+            unit=money(Decimal(str(cycle['fiyat']))/count)
+            return money(Decimal(str(cycle['fiyat']))-Decimal(str(unit))*(count-1)) if used==count-1 else unit
+        used-=count
+    raise ValueError('Paketin ücretli seans hakkı bitti.')
 
 def _yenilenen_programu_aktar(c,p):
     if not p['aktif'] or c.execute('SELECT 1 FROM haftalik_program_sablonlari WHERE paket_id=?',(p['id'],)).fetchone():return
@@ -2196,8 +2217,7 @@ def seans_kaydet(d):
             if gift or not consumed:price=0.0
             elif old and old['hak_dustu'] and not old['hediye']:price=float(old['ucret'])
             else:
-                unit=money(Decimal(str(p['fiyat']))/p['seans_sayisi'])
-                price=money(Decimal(str(p['fiyat']))-Decimal(str(unit))*(p['seans_sayisi']-1)) if paidused==p['seans_sayisi']-1 else unit
+                price=_paket_seans_ucreti(c,p,paidused)
         else:
             if h['kategori']=='pilates' and h['paket_mi'] and not old:raise ValueError('Pilates paket hizmeti için paket seçiniz.')
             keep_snapshot=bool(old and str(old.get('hizmet_id'))==str(h['id']) and group==old['grup_turu'] and ind==old['indirimli'])
@@ -3460,6 +3480,81 @@ def paket_kaydet(d):
     if getattr(_ATOMIC,'connection',None) is not None:return write(_ATOMIC.connection)
     with atomic_registration() as c:return write(c)
 
+_PACKAGE_319=paket_kaydet
+
+def _yenilenen_programu_uzat(c,paket,baslangic,bitis):
+    if bitis<=paket['bitis']:return
+    plans=q(c,"SELECT * FROM haftalik_program_sablonlari WHERE paket_id=? AND aktif=1 AND bitis<>'' AND bitis<=? ORDER BY id",
+            (paket['id'],paket['bitis']))
+    if baslangic<=(date.fromisoformat(paket['bitis'])+timedelta(days=1)).isoformat():
+        for plan in plans:
+            c.execute('UPDATE haftalik_program_sablonlari SET bitis=? WHERE id=?',(bitis,plan['id']))
+        return
+    programs={}
+    for plan in plans:
+        program=programs.setdefault(plan.get('program_id') or str(plan['id']),secrets.token_hex(16))
+        c.execute('''INSERT INTO haftalik_program_sablonlari
+            (danisan_id,terapist_id,hizmet_id,gun_index,saat,sure_dk,oda_id,aktif,notlar,grup_turu,program_id,paket_id,baslangic,bitis)
+            VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)''',
+            (plan['danisan_id'],plan['terapist_id'],plan['hizmet_id'],plan['gun_index'],plan['saat'],
+             plan['sure_dk'],plan['oda_id'],plan['notlar'],plan['grup_turu'],program,paket['id'],baslangic,bitis))
+
+def paket_kaydet(d):
+    """Append same-price purchases to a finished package; retain purchase prices."""
+    d=dict(d)
+    if getattr(_ATOMIC,'connection',None) is None:
+        with atomic_registration():return paket_kaydet(d)
+    with transaction() as c:
+        if d.get('id'):
+            old=exists(c,'pilates_paketleri',integer(d['id'],1),'Paket')
+            cycles=q(c,'SELECT * FROM pilates_paket_yenilemeleri WHERE paket_id=? ORDER BY id',(old['id'],))
+            if not cycles:return _PACKAGE_319(d)
+            v={**old,**d}
+            if any(str(v[k])!=str(old[k]) for k in ('danisan_id','grup_turu','seans_sayisi','fiyat','baslangic')):
+                raise ValueError('Yenilenmiş paketin fiyatı, hakları ve başlangıcı düzenlenemez; yeni alımı Yenile ile kaydedin.')
+            end=valid_date(v['bitis']);gift=integer(v['hediye_seans'])
+            if end<old['bitis'] or gift<old['hediye_seans']:
+                raise ValueError('Yenilenmiş paketin bitişi veya hediye hakları azaltılamaz.')
+            c.execute('UPDATE pilates_paketleri SET ad=?,bitis=?,hediye_seans=?,aktif=? WHERE id=?',
+                      (required(v['ad'],'Paket adı'),end,gift,flag(v['aktif']),old['id']))
+            c.execute('UPDATE pilates_paket_yenilemeleri SET bitis=?,hediye_seans=hediye_seans+? WHERE id=?',
+                      (end,gift-old['hediye_seans'],cycles[-1]['id']))
+            _yenilenen_programu_uzat(c,old,(date.fromisoformat(old['bitis'])+timedelta(days=1)).isoformat(),end)
+            return old['id']
+        did=integer(d.get('danisan_id'),1)
+        group=d.get('grup_turu','bireysel')
+        price=money(d.get('fiyat'))
+        n=integer(d.get('seans_sayisi',8),1)
+        gift=integer(d.get('hediye_seans',0))
+        start=valid_date(d.get('baslangic'));end=valid_date(d.get('bitis'))
+        if end<start:raise ValueError('Bitiş başlangıçtan önce olamaz.')
+        prior_id=d.get('yenilenen_paket_id')
+        if prior_id:
+            candidates=[exists(c,'pilates_paketleri',integer(prior_id,1),'Önceki paket')]
+        else:
+            candidates=q(c,'SELECT * FROM pilates_paketleri WHERE danisan_id=? AND grup_turu=? AND aktif=1 ORDER BY bitis DESC,id DESC LIMIT 1',(did,group))
+        for old in candidates:
+            if old['danisan_id']!=did or old['grup_turu']!=group or not old['aktif']:continue
+            if (old.get('grup_id') or None)!=(integer(d['grup_id'],1) if d.get('grup_id') else None):continue
+            used=c.execute('SELECT COUNT(*) FROM seanslar WHERE paket_id=? AND hak_dustu=1 AND hediye=0',(old['id'],)).fetchone()[0]
+            if used<old['seans_sayisi'] and old['bitis']>=start:continue
+            cycles=q(c,'SELECT * FROM pilates_paket_yenilemeleri WHERE paket_id=? ORDER BY id',(old['id'],))
+            prior_price=cycles[-1]['fiyat'] if cycles else old['fiyat']
+            if abs(prior_price-price)>.005:break
+            if not cycles:
+                c.execute('''INSERT INTO pilates_paket_yenilemeleri(paket_id,baslangic,bitis,fiyat,seans_sayisi,hediye_seans)
+                    VALUES(?,?,?,?,?,?)''',(old['id'],old['baslangic'],old['bitis'],old['fiyat'],old['seans_sayisi'],old['hediye_seans']))
+            c.execute('''INSERT INTO pilates_paket_yenilemeleri(paket_id,baslangic,bitis,fiyat,seans_sayisi,hediye_seans)
+                VALUES(?,?,?,?,?,?)''',(old['id'],start,end,price,n,gift))
+            new_end=max(old['bitis'],end)
+            c.execute('''UPDATE pilates_paketleri SET fiyat=?,seans_sayisi=?,hediye_seans=?,bitis=?,aktif=1
+                WHERE id=?''',(money(Decimal(str(old['fiyat']))+Decimal(str(price))),old['seans_sayisi']+n,
+                             old['hediye_seans']+gift,new_end,old['id']))
+            _yenilenen_programu_uzat(c,old,start,new_end)
+            return old['id']
+        d.pop('yenilenen_paket_id',None)
+        return _PACKAGE_319(d)
+
 def service_references(c,hid):
     total=0
     for row in q(c,"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
@@ -3641,6 +3736,12 @@ def init_db():
                 tarih TEXT NOT NULL,
                 terapist_id INTEGER NOT NULL REFERENCES terapistler(id),
                 PRIMARY KEY(plan_id,tarih))''')
+            c.execute('''CREATE TABLE IF NOT EXISTS pilates_paket_yenilemeleri(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                paket_id INTEGER NOT NULL REFERENCES pilates_paketleri(id) ON DELETE CASCADE,
+                baslangic TEXT NOT NULL, bitis TEXT NOT NULL,
+                fiyat REAL NOT NULL, seans_sayisi INTEGER NOT NULL,
+                hediye_seans INTEGER NOT NULL DEFAULT 0)''')
             c.execute("INSERT OR REPLACE INTO ayarlar VALUES('app_version',?)",(APP_VERSION,))
 
 def seans_haftalik_programi(week_start=None,terapist_id=None):
@@ -3724,7 +3825,7 @@ def _save_kind(kind,d):
     if kind=='kayitli_seans_terapisti':return kayitli_seans_terapist_degistir(d)
     return _SAVE_318(kind,d)
 
-APP_VERSION='3.19.0'
+APP_VERSION='3.20.0'
 
 if CLOUD_MODE:
     from cloud.runtime import install
