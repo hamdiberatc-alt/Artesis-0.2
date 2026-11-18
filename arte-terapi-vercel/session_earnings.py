@@ -23,11 +23,12 @@ def report(app, month, therapist_id=None):
         if tid and not therapists:
             raise ValueError('Terapist bulunamadı.')
         sessions = app['q'](conn, '''SELECT s.id,s.tarih,s.saat,s.terapist_id,s.tip,s.hediye,
-            s.paket_id,s.ucret,s.grup_turu,s.hizmet_id,s.oda_id,s.sure_dk,
+            s.paket_id,s.ucret,s.grup_turu,s.hizmet_id,s.oda_id,s.sure_dk,p.grup_id,
             source.ucret kaynak_ucreti,
             d.ad||' '||d.soyad danisan_adi,h.alan_adi hizmet_adi
             FROM seanslar s
             LEFT JOIN seanslar source ON source.id=s.telafi_kaynak_id
+            LEFT JOIN pilates_paketleri p ON p.id=s.paket_id
             LEFT JOIN danisanlar d ON d.id=s.danisan_id
             LEFT JOIN hizmet_alanlari h ON h.id=s.hizmet_id
             WHERE s.tarih BETWEEN ? AND ? AND s.tarih<=? AND s.gelmedi=0''' +
@@ -55,7 +56,7 @@ def report(app, month, therapist_id=None):
         for session in grouped.get(ident, []):
             key = ('record',session['id'])
             if session['grup_turu'] in ('grup2','grup3') and session['saat']:
-                key = ('group',session['tarih'],session['saat'],session['hizmet_id'],
+                key = ('group',session['grup_id'],session['tarih'],session['saat'],session['hizmet_id'],
                        session['oda_id'],session['sure_dk'],session['grup_turu'])
             units.setdefault(key,[]).append(session)
         for index, members in enumerate(units.values(), 1):

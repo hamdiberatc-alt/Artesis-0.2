@@ -16,6 +16,10 @@ vm.runInContext("state.calendarItems=[{id:12,kaynak:'planli',danisan_id:1,danisa
 fixture.boot.hizmetler.push({id:11,terapist_id:1,terapist_ids:[1,2],alan_adi:'Pilates',kategori:'pilates',aktif:1});
 ctx.openTherapistChange(0,'session');assert(nodes.get('therapist-change').open);assert(nodes.get('therapist-change-note').textContent.includes('Yalnız seçili tarihteki'));assert(nodes.get('therapist-change-id').innerHTML.includes('B İki'));
 ctx.openTherapistChange(0,'client');assert(nodes.get('therapist-change-note').textContent.includes('birincil terapisti'));nodes.get('therapist-change').close();
+assert(vm.runInContext("renderList('danisanlar',fixture.boot.danisanlar)",ctx).includes('client-therapist-direct'));
+ctx.openClientTherapistChange(1);assert(nodes.get('therapist-change').open);assert(nodes.get('therapist-change-id').innerHTML.includes('B İki'));nodes.get('therapist-change').close();
+Object.assign(fixture.data.paketler[0],{yenileme_fiyati:4000,yenileme_seans_sayisi:8,yenileme_hediye_seans:2,yenileme_baslangic:'2026-01-01',yenileme_bitis:'2027-12-31',yenileme_adedi:0});
+await ctx.pilatesAction('p-renew','1');assert.equal(vm.runInContext('state.edit.row.yenilenen_paket_id',ctx),1);assert.equal(vm.runInContext('state.edit.row.fiyat',ctx),4000);nodes.get('editor').close();
 await vm.runInContext("openProgram({danisan_id:1,terapist_id:2,hizmet_id:1})",ctx);vm.runInContext("$('f-pg-package').value='';state.page='planlar';programServices(1)",ctx);assert(!nodes.get('f-pg-service').innerHTML.includes('Ortak'));
 const menu=vm.runInContext("renderList('hizmetler',fixture.boot.hizmetler)",ctx);assert(menu.includes('Yönet'));assert(menu.includes('Terapistleri seç'));
 const packages=vm.runInContext("renderList('paketler',fixture.data.paketler)",ctx);assert(packages.includes('package-delete-direct'));assert(packages.includes('Düzenle'));
