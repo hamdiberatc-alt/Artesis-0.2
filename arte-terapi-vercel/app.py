@@ -3859,7 +3859,7 @@ def _save_kind(kind,d):
     if kind=='kayitli_seans_terapisti':return kayitli_seans_terapist_degistir(d)
     return _SAVE_318(kind,d)
 
-APP_VERSION='3.21.0'
+APP_VERSION='3.21.1'
 
 if CLOUD_MODE:
     from cloud.runtime import install
