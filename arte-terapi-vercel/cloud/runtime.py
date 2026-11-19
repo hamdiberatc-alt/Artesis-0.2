@@ -210,7 +210,7 @@ def install(app):
     original_html = app['build_html']
     @lru_cache(maxsize=1)
     def cloud_html():
-        return original_html().replace('v3.21.4', 'v3.21.4 Bulut').replace('Yedek indir', 'Yedekleme').replace('en çok 10 MB', 'en çok 2 MB').replace('f.size>10*1024*1024', 'f.size>2*1024*1024').replace('PDF en çok 10 MB olabilir.', 'PDF en çok 2 MB olabilir.').replace('Sürüm geçişinden önce otomatik yedek alınır.', 'Bulut tam yedeği bilgisayardaki yedekleme aracıyla alınır; kurulum rehberini izleyin.')
+        return original_html().replace('v3.21.5', 'v3.21.5 Bulut').replace('Yedek indir', 'Yedekleme').replace('en çok 10 MB', 'en çok 2 MB').replace('f.size>10*1024*1024', 'f.size>2*1024*1024').replace('PDF en çok 10 MB olabilir.', 'PDF en çok 2 MB olabilir.').replace('Sürüm geçişinden önce otomatik yedek alınır.', 'Bulut tam yedeği bilgisayardaki yedekleme aracıyla alınır; kurulum rehberini izleyin.')
     app['build_html'] = cloud_html
     original = app['Handler']
     class CloudHandler(original):
@@ -264,5 +264,5 @@ def install(app):
 
     app.update(init_db=init_db, read_report_blob=read_report,
                rapor_pdf_kaydet=save_report, rapor_pdf_sil=delete_report,
-               backup_bytes=backup, Handler=CloudHandler, APP_VERSION='3.21.4-cloud')
+               backup_bytes=backup, Handler=CloudHandler, APP_VERSION='3.21.5-cloud')
 
