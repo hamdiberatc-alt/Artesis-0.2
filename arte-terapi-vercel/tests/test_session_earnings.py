@@ -38,6 +38,21 @@ class SessionEarningsTest(unittest.TestCase):
         self.sess(tarih=previous_month,saat='08:00')
         previous=session_earnings.report(self.m,previous_month[:7],1)
         self.assertEqual((previous['toplam_seans'],previous['ilk_80'][0]['oran']),(1,0.4))
+        session_earnings.save_rates(self.m,{'ay':self.today[:7],'terapist_id':1,
+            'ilk_80_oran':'35,5','sonraki_oran':'60'})
+        updated=self.report()
+        self.assertEqual(updated['ilk_80'][0]['oran'],0.355)
+        self.assertIn('35,5%',session_earnings.csv_text(updated))
+        self.assertEqual(next(r for r in updated['sonraki'] if r['terapist_id']==1)['oran'],0.6)
+        self.assertEqual(next(r for r in updated['ilk_80'] if r['terapist_id']==2)['oran'],0.4)
+        self.assertEqual(session_earnings.report(self.m,previous_month[:7],1)['ilk_80'][0]['oran'],0.4)
+        next_month=(date.today().replace(day=28)+timedelta(days=4)).replace(day=1).isoformat()[:7]
+        next_rates=session_earnings.report(self.m,next_month,1)['terapistler'][0]
+        self.assertEqual((next_rates['ilk_80_oran'],next_rates['sonraki_oran']),(0.355,0.6))
+        session_earnings.save_rates(self.m,{'ay':next_month,'terapist_id':1,
+            'ilk_80_oran':'45','sonraki_oran':'55'})
+        self.assertEqual(session_earnings.report(self.m,next_month,1)['terapistler'][0]['ilk_80_oran'],0.45)
+        self.assertEqual(self.report(1)['terapistler'][0]['ilk_80_oran'],0.355)
 
     def test_makeup_counts_when_completed_and_gift_has_zero_fee(self):
         package_id=self.package(n=2,gift=1,price=600)
@@ -86,6 +101,10 @@ class SessionEarningsTest(unittest.TestCase):
     def test_month_validation(self):
         with self.assertRaises(ValueError):session_earnings.report(self.m,'2026-13')
         with self.assertRaises(ValueError):session_earnings.report(self.m,self.today[:7],99999)
+        with self.assertRaises(ValueError):session_earnings.save_rates(self.m,{'ay':self.today[:7],
+            'terapist_id':1,'ilk_80_oran':'101','sonraki_oran':'50'})
+        with self.assertRaises(ValueError):session_earnings.save_rates(self.m,{'ay':self.today[:7],
+            'terapist_id':1,'ilk_80_oran':'40','sonraki_oran':'nan'})
 
     def test_private_report_and_csv(self):
         month=self.today[:7]
@@ -101,3 +120,7 @@ class SessionEarningsTest(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertIn('text/csv',headers['Content-Type'])
         self.assertIn('40%',body.decode('utf-8-sig'))
+        rates={'ay':month,'terapist_id':1,'ilk_80_oran':'30','sonraki_oran':'65'}
+        self.assertEqual(self.http('/api/session-earnings/rates',rates,cookie)[0],403)
+        self.assertEqual(self.http('/api/session-earnings/rates',rates,cookie,json.loads(self.http('/api/session',cookie=cookie)[1])['csrf'])[0],200)
+        self.assertEqual(self.report(1)['ilk_80'][0]['oran'],0.3)

@@ -2,10 +2,39 @@
 
 import csv
 import io
+import json
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from payroll import month_bounds
+
+RATE_PREFIX = 'seans_kazanc_orani_v1:'
+DEFAULT_RATES = (Decimal('0.40'), Decimal('0.50'))
+
+
+def _percentage(value):
+    try:
+        percent = Decimal(str(value).strip().replace(',', '.'))
+        if not percent.is_finite() or not 0 <= percent <= 100:
+            raise ValueError()
+        return (percent / 100).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        raise ValueError('Kazanç oranı 0 ile 100 arasında yüzde olmalıdır (örnek: 45,5).')
+
+
+def save_rates(app, data):
+    month = data.get('ay')
+    month_bounds(month)
+    tid = app['integer'](data.get('terapist_id'), 1)
+    first = _percentage(data.get('ilk_80_oran'))
+    later = _percentage(data.get('sonraki_oran'))
+    with app['transaction']() as conn:
+        app['exists'](conn, 'terapistler', tid, 'Terapist')
+        conn.execute('INSERT OR REPLACE INTO ayarlar(anahtar,deger) VALUES(?,?)',
+                     (RATE_PREFIX + str(tid) + ':' + month,
+                      json.dumps({'ilk_80':str(first),'sonraki':str(later)})))
+    return {'ay':month,'terapist_id':tid,'ilk_80_oran':float(first),
+            'sonraki_oran':float(later)}
 
 
 def _money(value):
@@ -22,6 +51,8 @@ def report(app, month, therapist_id=None):
                               [tid] if tid else [])
         if tid and not therapists:
             raise ValueError('Terapist bulunamadı.')
+        rate_rows = app['q'](conn,'SELECT anahtar,deger FROM ayarlar WHERE anahtar LIKE ?',
+                             (RATE_PREFIX + '%',))
         sessions = app['q'](conn, '''SELECT s.id,s.tarih,s.saat,s.terapist_id,s.tip,s.hediye,
             s.paket_id,s.ucret,s.grup_turu,s.hizmet_id,s.oda_id,s.sure_dk,p.grup_id,
             source.ucret kaynak_ucreti,
@@ -47,10 +78,21 @@ def report(app, month, therapist_id=None):
             continue
         grouped.setdefault(session['terapist_id'], []).append(session)
 
+    configured = {}
+    for row in rate_rows:
+        key = row['anahtar'][len(RATE_PREFIX):].split(':')
+        if len(key) != 2 or not key[0].isdigit() or key[1] > month:
+            continue
+        ident = int(key[0])
+        if ident not in configured or key[1] > configured[ident][0]:
+            values = json.loads(row['deger'])
+            configured[ident] = (key[1],Decimal(values['ilk_80']),Decimal(values['sonraki']))
     summaries, first_eighty, later = [], [], []
     for therapist in therapists:
         ident = therapist['id']
         name = (therapist['ad'] + ' ' + (therapist['soyad'] or '')).strip()
+        active = configured.get(ident)
+        first_rate, later_rate = (active[1],active[2]) if active else DEFAULT_RATES
         initial_total = later_total = Decimal('0.00')
         units = {}
         for session in grouped.get(ident, []):
@@ -61,7 +103,7 @@ def report(app, month, therapist_id=None):
             units.setdefault(key,[]).append(session)
         for index, members in enumerate(units.values(), 1):
             first = members[0]
-            rate = Decimal('0.40') if index <= 80 else Decimal('0.50')
+            rate = first_rate if index <= 80 else later_rate
             # Older completed makeups stored the package fee on the missed source.
             gross = sum((_money(s['kaynak_ucreti'] if s['tip']=='telafi' and
                           not s['ucret'] and s['kaynak_ucreti'] is not None
@@ -83,6 +125,8 @@ def report(app, month, therapist_id=None):
                 later.append(row)
                 later_total += earning
         summaries.append({'terapist_id':ident,'terapist_adi':name,
+                          'ilk_80_oran':float(first_rate),'sonraki_oran':float(later_rate),
+                          'oran_baslangic':active[0] if active else None,
                           'ilk_80_adet':min(80,len(units)),
                           'sonraki_adet':max(0,len(units)-80),
                           'ilk_80_kazanc':float(initial_total),
@@ -107,6 +151,6 @@ def csv_text(data):
                          row['tarih'],row['saat'],row['danisan_adi'],row['hizmet_adi'],
                          row['tip'],row['katilimci'],','.join(map(str,row['seans_ids'])),
                          f"{row['seans_ucreti']:.2f}".replace('.',','),
-                         str(int(row['oran']*100))+'%',
+                         format((Decimal(str(row['oran']))*100).normalize(),'f').replace('.',',')+'%',
                          f"{row['terapist_kazanci']:.2f}".replace('.',',')]])
     return '\ufeff'+output.getvalue()

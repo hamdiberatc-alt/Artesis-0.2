@@ -2873,6 +2873,9 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/payroll/rates':
                 import payroll
                 return self._send({'ok':True,'data':payroll.save_rates(globals(),d)})
+            if path=='/api/session-earnings/rates':
+                import session_earnings
+                return self._send({'ok':True,'data':session_earnings.save_rates(globals(),d)})
             if path=='/api/logout':
                 with transaction() as c:c.execute('DELETE FROM auth_sessions WHERE token_hash=?',(auth['token_hash'],))
                 return self._send({'ok':True},headers={'Set-Cookie':'arte_session=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/'})
@@ -3888,7 +3891,7 @@ def _save_kind(kind,d):
     if kind=='kayitli_seans_terapisti':return kayitli_seans_terapist_degistir(d)
     return _SAVE_318(kind,d)
 
-APP_VERSION='3.21.4'
+APP_VERSION='3.21.5'
 _INIT_3211=init_db
 
 def init_db():
