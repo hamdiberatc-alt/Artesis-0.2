@@ -21,17 +21,18 @@ CREATE TABLE IF NOT EXISTS cloud_rate_limits(key TEXT PRIMARY KEY,window INTEGER
 CREATE TABLE IF NOT EXISTS program_seans_terapistleri(plan_id INTEGER NOT NULL REFERENCES haftalik_program_sablonlari(id) ON DELETE CASCADE,tarih TEXT NOT NULL,terapist_id INTEGER NOT NULL REFERENCES terapistler(id),PRIMARY KEY(plan_id,tarih));
 CREATE TABLE IF NOT EXISTS pilates_paket_yenilemeleri(id INTEGER PRIMARY KEY AUTOINCREMENT,paket_id INTEGER NOT NULL REFERENCES pilates_paketleri(id) ON DELETE CASCADE,baslangic TEXT NOT NULL,bitis TEXT NOT NULL,fiyat REAL NOT NULL,seans_sayisi INTEGER NOT NULL,hediye_seans INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS danisan_terapist_degisimleri(danisan_id INTEGER NOT NULL REFERENCES danisanlar(id) ON DELETE CASCADE,tarih TEXT NOT NULL,terapist_id INTEGER NOT NULL REFERENCES terapistler(id),PRIMARY KEY(danisan_id,tarih));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_danisan_tek_terapist ON danisan_terapistler(danisan_id);
 '''
-CLOUD_VERSION = '8'
+CLOUD_VERSION = '9'
 PDF_LIMIT = 2 * 1024 * 1024
 
 
-def ensure_schema(c, password_hash, upgrade=None, reconcile=None):
+def ensure_schema(c, password_hash, upgrade=None, reconcile=None, single_therapist=None):
     """Initialize only an empty database, under a remote writer lock."""
     # A new serverless worker must not take a writer lock on an installed DB.
     if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_meta'").fetchone():
         version = c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()
-        if version and version[0] in ('1','2','3','4','5','6','7'):
+        if version and version[0] in ('1','2','3','4','5','6','7','8'):
             c.execute('BEGIN IMMEDIATE')
             try:
                 if version[0] in ('1','2','3'):
@@ -56,7 +57,8 @@ def ensure_schema(c, password_hash, upgrade=None, reconcile=None):
                     danisan_id INTEGER NOT NULL REFERENCES danisanlar(id) ON DELETE CASCADE,
                     tarih TEXT NOT NULL,terapist_id INTEGER NOT NULL REFERENCES terapistler(id),
                     PRIMARY KEY(danisan_id,tarih))''')
-                if reconcile: reconcile(c)
+                if reconcile and version[0] != '8': reconcile(c)
+                if single_therapist: single_therapist(c)
                 c.execute("UPDATE cloud_meta SET value=? WHERE key='version'", (CLOUD_VERSION,))
                 c.commit()
             except Exception:
@@ -156,7 +158,7 @@ def install(app):
             if len(password) < 16:
                 raise ValueError('ARTE_ADMIN_PASSWORD en az 16 karakter olmalı; Vercel ortam değişkenlerinden ayarlayın.')
             c = db.connect()
-            try: ensure_schema(c, lambda: app['_password_hash'](password), app['_migrate_pilates_316'], app['_pilates_seans_terapistlerini_uzlastir'])
+            try: ensure_schema(c, lambda: app['_password_hash'](password), app['_migrate_pilates_316'], app['_pilates_seans_terapistlerini_uzlastir'], app['_tek_danisan_terapist_atamalarini_duzelt'])
             finally: c.close()
             ready = True
 
@@ -208,7 +210,7 @@ def install(app):
     original_html = app['build_html']
     @lru_cache(maxsize=1)
     def cloud_html():
-        return original_html().replace('v3.21.2', 'v3.21.2 Bulut').replace('Yedek indir', 'Yedekleme').replace('en çok 10 MB', 'en çok 2 MB').replace('f.size>10*1024*1024', 'f.size>2*1024*1024').replace('PDF en çok 10 MB olabilir.', 'PDF en çok 2 MB olabilir.').replace('Sürüm geçişinden önce otomatik yedek alınır.', 'Bulut tam yedeği bilgisayardaki yedekleme aracıyla alınır; kurulum rehberini izleyin.')
+        return original_html().replace('v3.21.3', 'v3.21.3 Bulut').replace('Yedek indir', 'Yedekleme').replace('en çok 10 MB', 'en çok 2 MB').replace('f.size>10*1024*1024', 'f.size>2*1024*1024').replace('PDF en çok 10 MB olabilir.', 'PDF en çok 2 MB olabilir.').replace('Sürüm geçişinden önce otomatik yedek alınır.', 'Bulut tam yedeği bilgisayardaki yedekleme aracıyla alınır; kurulum rehberini izleyin.')
     app['build_html'] = cloud_html
     original = app['Handler']
     class CloudHandler(original):
@@ -262,5 +264,5 @@ def install(app):
 
     app.update(init_db=init_db, read_report_blob=read_report,
                rapor_pdf_kaydet=save_report, rapor_pdf_sil=delete_report,
-               backup_bytes=backup, Handler=CloudHandler, APP_VERSION='3.21.2-cloud')
+               backup_bytes=backup, Handler=CloudHandler, APP_VERSION='3.21.3-cloud')
 

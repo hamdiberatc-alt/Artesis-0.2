@@ -3,7 +3,7 @@ from datetime import date,timedelta
 ROOT=pathlib.Path(__file__).resolve().parent
 class AppTest(unittest.TestCase):
  def setUp(self):
-  self.old_db_path=os.environ.get('ARTE_DB_PATH');self.tmp=tempfile.TemporaryDirectory();os.environ['ARTE_DB_PATH']=self.tmp.name+'/test.db';self.m=runpy.run_path(str(ROOT.parent/'app.py'));self.m['init_db']();self.today=date.today().isoformat();self.a=self.call('danisan_ekle',{'ad':'A','terapist_id':1,'terapist_ids':[2,3]});self.b=self.call('danisan_ekle',{'ad':'B','terapist_id':2});self.srv=None
+  self.old_db_path=os.environ.get('ARTE_DB_PATH');self.tmp=tempfile.TemporaryDirectory();os.environ['ARTE_DB_PATH']=self.tmp.name+'/test.db';self.m=runpy.run_path(str(ROOT.parent/'app.py'));self.m['init_db']();self.today=date.today().isoformat();self.a=self.call('danisan_ekle',{'ad':'A','terapist_id':1});self.b=self.call('danisan_ekle',{'ad':'B','terapist_id':2});self.srv=None
  def tearDown(self):
   if self.srv:self.srv.shutdown();self.srv.server_close()
   self.tmp.cleanup()
@@ -19,7 +19,7 @@ class AppTest(unittest.TestCase):
  def test_fresh_and_idempotent(self):
   room=self.call('odalar_listesi')[0];self.call('oda_kaydet',{**room,'ad':'TEST','kapasite':1,'kategori':'grup','aktif':0});self.m['init_db'].__globals__['_INITIALIZED_PATHS'].clear();self.call('init_db');r=self.rows('SELECT * FROM odalar WHERE id=?',(room['id'],))[0];self.assertEqual((r['ad'],r['kapasite'],r['kategori'],r['aktif']),('TEST',1,'grup',0));self.assertEqual(len(self.rows('SELECT * FROM odalar')),3)
  def test_multi_therapist(self):
-  x=self.sess();y=self.sess(terapist_id=2,hizmet_id=4);self.assertNotEqual(x,y);d=self.call('danisan_detay',self.a);self.assertEqual(len(d['terapistler']),3);r=self.call('gelir_raporu',self.today,self.today);self.assertEqual(r['toplam']['brut'],5000);self.assertEqual(len(r['terapistler']),2)
+  x=self.sess();y=self.sess(terapist_id=2,hizmet_id=4);self.assertNotEqual(x,y);d=self.call('danisan_detay',self.a);self.assertEqual(len(d['terapistler']),1);r=self.call('gelir_raporu',self.today,self.today);self.assertEqual(r['toplam']['brut'],5000);self.assertEqual(len(r['terapistler']),2)
  def test_update_time_soap(self):
   sid=self.sess(soap={'s':'KEEP','o':'o','a':'a','p':'p'},tip='degerlendirme');self.call('seans_kaydet',{'id':sid,'saat':'10:00'});r=self.rows('SELECT * FROM seanslar')[0];self.assertEqual(len(self.rows('SELECT * FROM seanslar')),1);self.assertEqual((r['soap_s'],r['tip']),('KEEP','degerlendirme'))
  def test_no_show(self):
@@ -48,7 +48,7 @@ class AppTest(unittest.TestCase):
  def test_identical_expenses(self):
   a=self.call('gider_ekle',{'tarih':self.today,'tutar':100,'kategori':'A'});b=self.call('gider_ekle',{'tarih':self.today,'tutar':100,'kategori':'B'});self.call('gider_sil',a);self.assertEqual(self.call('kasa_listesi')[0]['kaynak_id'],b)
  def test_invalid_inputs_and_rollback(self):
-  with self.assertRaises(sqlite3.IntegrityError):self.call('danisan_ekle',{'ad':'Bad','terapist_id':1,'terapist_ids':[999999]})
+  with self.assertRaises(ValueError):self.call('danisan_ekle',{'ad':'Bad','terapist_id':1,'terapist_ids':[999999]})
   self.assertFalse(self.call('danisanlar_listesi',None,'Bad'))
   for change in [{'hizmet_id':999999},{'saat':'99:99'},{'sure_dk':-5},{'tarih':'2026-02-30'}]:
    with self.assertRaises(ValueError):self.sess(**change)

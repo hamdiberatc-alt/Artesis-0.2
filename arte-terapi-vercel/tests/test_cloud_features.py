@@ -13,7 +13,7 @@ def setup(self):
     CloudTest.setUp(self)
     self.m = self.app
     self.today = date.today().isoformat()
-    self.a = self.call('danisan_ekle', {'ad':'A','terapist_id':1,'terapist_ids':[2,3]})
+    self.a = self.call('danisan_ekle', {'ad':'A','terapist_id':1})
     self.b = self.call('danisan_ekle', {'ad':'B','terapist_id':2})
     self.srv = None
 

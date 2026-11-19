@@ -540,16 +540,12 @@ def mesaj_hedefleri_listesi(tip='yarin_randevu', terapist_id=None, tarih=None, w
 
 
 def _danisan_terapistleri_yaz(conn, danisan_id, primary_terapist_id, terapist_ids=None):
-    ids = set()
-    if primary_terapist_id:
-        ids.add(int(primary_terapist_id))
-    for tid in (terapist_ids or []):
-        if tid not in (None, '', 0, '0'):
-            ids.add(int(tid))
+    primary_terapist_id = integer(primary_terapist_id, 1)
+    if terapist_ids is not None:
+        if not isinstance(terapist_ids, list) or any(integer(tid, 1) != primary_terapist_id for tid in terapist_ids):
+            raise ValueError('Danışana yalnızca bir terapist atanabilir.')
     conn.execute("DELETE FROM danisan_terapistler WHERE danisan_id=?", (danisan_id,))
-    for tid in ids:
-        rol = 'primary' if int(tid) == int(primary_terapist_id) else 'ek'
-        conn.execute("INSERT OR IGNORE INTO danisan_terapistler(danisan_id,terapist_id,rol) VALUES(?,?,?)", (danisan_id, tid, rol))
+    conn.execute("INSERT INTO danisan_terapistler(danisan_id,terapist_id,rol) VALUES(?,?,'primary')", (danisan_id, primary_terapist_id))
 
 # ── HİZMET ALANLARI ──────────────────────────────────────────────────────────────
 
@@ -562,16 +558,13 @@ def danisanlar_listesi(terapist_id=None, arama=''):
         (SELECT COUNT(*) FROM seanslar WHERE danisan_id=d.id
          AND strftime('%Y-%m',tarih)=strftime('%Y-%m','now','localtime')) as bu_ay_seans,
         (SELECT COALESCE(SUM(tutar),0) FROM odemeler WHERE danisan_id=d.id) as toplam_odeme,
-        t.ad as terapist_adi, t.renk as terapist_renk,
-        (SELECT GROUP_CONCAT(tt.ad, ', ') FROM danisan_terapistler dt
-         JOIN terapistler tt ON tt.id=dt.terapist_id
-         WHERE dt.danisan_id=d.id) as terapistler
+        TRIM(t.ad||' '||COALESCE(t.soyad,'')) as terapist_adi, t.renk as terapist_renk
         FROM danisanlar d LEFT JOIN terapistler t ON t.id=d.terapist_id
         WHERE d.aktif=1"""
     p = []
     if terapist_id:
-        sql += " AND (d.terapist_id=? OR EXISTS (SELECT 1 FROM danisan_terapistler dt WHERE dt.danisan_id=d.id AND dt.terapist_id=?))"
-        p.extend([terapist_id, terapist_id])
+        sql += " AND d.terapist_id=?"
+        p.append(terapist_id)
     if arama:
         sql += " AND (d.ad||' '||d.soyad LIKE ? OR d.telefon LIKE ? OR d.tckn LIKE ?)"
         p += [f'%{arama}%', f'%{arama}%', f'%{arama}%']
@@ -580,7 +573,7 @@ def danisanlar_listesi(terapist_id=None, arama=''):
 
 def danisan_detay(did):
     conn = get_db()
-    d = q(conn, "SELECT d.*, t.ad as terapist_adi FROM danisanlar d LEFT JOIN terapistler t ON t.id=d.terapist_id WHERE d.id=?", (did,))
+    d = q(conn, "SELECT d.*, TRIM(t.ad||' '||COALESCE(t.soyad,'')) as terapist_adi FROM danisanlar d LEFT JOIN terapistler t ON t.id=d.terapist_id WHERE d.id=?", (did,))
     if not d:
         conn.close(); return None
     d = d[0]
@@ -621,8 +614,8 @@ def aylik_grid(yil, ay, terapist_id):
     gun_sayisi = calendar.monthrange(int(yil), int(ay))[1]
     dans = q(conn, """SELECT d.id, d.ad||' '||d.soyad as tam_adi
         FROM danisanlar d
-        WHERE d.aktif=1 AND (d.terapist_id=? OR EXISTS (SELECT 1 FROM danisan_terapistler dt WHERE dt.danisan_id=d.id AND dt.terapist_id=?))
-        ORDER BY d.ad, d.soyad""", (terapist_id, terapist_id))
+        WHERE d.aktif=1 AND d.terapist_id=?
+        ORDER BY d.ad, d.soyad""", (terapist_id,))
     seanslar = q(conn, """SELECT s.*, h.takvim_rengi FROM seanslar s
         LEFT JOIN hizmet_alanlari h ON h.id=s.hizmet_id
         WHERE s.terapist_id=? AND strftime('%Y-%m',s.tarih)=? ORDER BY s.tarih, COALESCE(s.saat,'')""", (terapist_id, ay_str))
@@ -750,8 +743,8 @@ def randevular_listesi(tarih=None, ay=None, terapist_id=None):
     if tarih: sql += " AND r.tarih=?"; p.append(tarih)
     if ay: sql += " AND strftime('%Y-%m',r.tarih)=?"; p.append(ay)
     if terapist_id:
-        sql += " AND (r.terapist_id=? OR EXISTS (SELECT 1 FROM danisan_terapistler dt WHERE dt.danisan_id=r.danisan_id AND dt.terapist_id=?))"
-        p.extend([terapist_id, terapist_id])
+        sql += " AND r.terapist_id=?"
+        p.append(terapist_id)
     rows = q(conn, sql+" ORDER BY r.tarih, r.saat", p)
     conn.close(); return rows
 
@@ -1899,7 +1892,7 @@ def danisan_ekle(d):
         exists(c,'terapistler',d.get('terapist_id'),'Terapist');d=dict(d);d['ad']=required(d.get('ad'),'Ad')
         if d.get('dogum_tarihi'):valid_date(d['dogum_tarihi'])
         did=c.execute('INSERT INTO danisanlar('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',[d.get(f,'') for f in fields]).lastrowid
-        _danisan_terapistleri_yaz(c,did,d['terapist_id'],d.get('terapist_ids') or [])
+        _danisan_terapistleri_yaz(c,did,d['terapist_id'],d.get('terapist_ids'))
         return did
 
 def _danisan_program_terapistini_aktar(c,did,tid,effective):
@@ -1984,9 +1977,7 @@ def danisan_guncelle(d):
                 (old['id'],date.today().isoformat(),int(v['terapist_id'])))
             _danisan_program_terapistini_aktar(c,old['id'],int(v['terapist_id']),date.today().isoformat())
             _pilates_seans_terapistlerini_uzlastir(c,old['id'])
-        ids=d.get('terapist_ids')
-        if ids is None:ids=[r['terapist_id'] for r in q(c,'SELECT terapist_id FROM danisan_terapistler WHERE danisan_id=?',(d['id'],))]
-        _danisan_terapistleri_yaz(c,d['id'],v['terapist_id'],ids)
+        _danisan_terapistleri_yaz(c,d['id'],v['terapist_id'],d.get('terapist_ids'))
 
 def danisan_sil(did):
     # Archive: clinical history and financial audit trails stay intact.
@@ -2329,7 +2320,6 @@ def seans_kaydet(d):
         if origin_day:valid_date(origin_day)
         if origin_time:valid_time(origin_time)
         c.execute('UPDATE seanslar SET program_id=?,planlanan_saat=?,plan_tarihi=? WHERE id=?',(origin_program,origin_time,origin_day,sid))
-        c.execute("INSERT OR IGNORE INTO danisan_terapistler(danisan_id,terapist_id,rol) VALUES(?,?,'ek')",(did,tid))
         legacy_paid=bool(old and old.get('ucret_alindi') and not linked)
         if flag(d.get('ucret_alindi')) and not pid and price>linked and not legacy_paid:
             _payment_write(c,{'danisan_id':did,'seans_id':sid,'terapist_id':tid,'tutar':round(price-linked,2),'tarih':d.get('tahsilat_tarihi') or dt,'yontem':d.get('yontem','nakit')})
@@ -2462,7 +2452,6 @@ def haftalik_program_kaydet(d):
     pid=_PLAN_SAVE(d)
     with transaction() as c:
         c.execute('UPDATE haftalik_program_sablonlari SET grup_turu=? WHERE id=?',(d.get('grup_turu','bireysel'),pid))
-        c.execute("INSERT OR IGNORE INTO danisan_terapistler VALUES(?,?,'ek')",(d['danisan_id'],d['terapist_id']))
     return pid
 
 def gider_ekle(d):
@@ -2558,7 +2547,7 @@ def mesaj_hedefleri_listesi(tip='yarin_randevu',terapist_id=None,tarih=None,week
             for p in paketler_listesi():
                 if p['aktif'] and p['kalan']>0 and ((date.fromisoformat(p['bitis'])-ref).days<=7 or p['kalan']<=2):
                     d=exists(c,'danisanlar',p['danisan_id'])
-                    if terapist_id and not c.execute('SELECT 1 FROM danisan_terapistler WHERE danisan_id=? AND terapist_id=?',(d['id'],terapist_id)).fetchone():continue
+                    if terapist_id and str(d['terapist_id'])!=str(terapist_id):continue
                     items.append({**d,'danisan_id':d['id'],'kaynak':'pilates','kaynak_id':p['id'],'danisan_adi':d['ad']+' '+d['soyad'],'kalan_seans':p['kalan'],'bitis_tarihi':p['bitis'],'kalan_gun':max(0,(date.fromisoformat(p['bitis'])-ref).days)})
         else:
             if tip in ('24saat_kala','24saat_whatsapp','yarin_randevu'):start=end=(ref+timedelta(days=1)).isoformat()
@@ -3055,7 +3044,6 @@ def program_kaydet(d):
             if source_id:c.execute('DELETE FROM haftalik_program_sablonlari WHERE id=?',(source_id,))
             for s in cleaned:
                 c.execute('''INSERT INTO haftalik_program_sablonlari(danisan_id,terapist_id,hizmet_id,gun_index,saat,sure_dk,oda_id,aktif,notlar,grup_turu,program_id,paket_id,baslangic,bitis) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)''',(did,tid,hid,s['gun_index'],s['saat'],duration,room,str(d.get('notlar') or ''),group,program,pid,start,end))
-            c.execute("INSERT OR IGNORE INTO danisan_terapistler VALUES(?,?,'ek')",(did,tid))
             if pid:c.execute('INSERT OR IGNORE INTO pilates_uyeleri VALUES(?,?)',(did,date.today().isoformat()))
         return {'saved':True,'program_id':program,'slots':len(cleaned)}
 
@@ -3511,7 +3499,6 @@ def grup_programi_kaydet(d):
                 program=secrets.token_hex(16)
                 for slot in cleaned:
                     c.execute('''INSERT INTO haftalik_program_sablonlari(danisan_id,terapist_id,hizmet_id,gun_index,saat,sure_dk,oda_id,aktif,notlar,grup_turu,program_id,paket_id,baslangic,bitis) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)''',(member['danisan_id'],tid,hid,slot['gun_index'],slot['saat'],duration,room,str(d.get('notlar') or ''),package['grup_turu'],program,package['id'],start,end))
-                c.execute("INSERT OR IGNORE INTO danisan_terapistler VALUES(?,?,'ek')",(member['danisan_id'],tid))
                 c.execute('INSERT OR IGNORE INTO pilates_uyeleri VALUES(?,?)',(member['danisan_id'],date.today().isoformat()))
         return {'saved':True,'group_id':gid,'members':len(packages),'slots':len(cleaned)}
 
@@ -3883,7 +3870,6 @@ def kayitli_seans_terapist_degistir(d):
             if (not plan['baslangic'] or s['tarih']>=plan['baslangic']) and (not plan['bitis'] or s['tarih']<=plan['bitis']) and _aralik_cakisiyor(s['saat'],s['sure_dk'],plan['saat'],plan['sure_dk']):raise ValueError('Terapistin bu saatte başka programı var.')
         c.execute('UPDATE seanslar SET terapist_id=? WHERE id=?',(tid,sid))
         c.execute('UPDATE odemeler SET terapist_id=? WHERE seans_id=?',(tid,sid))
-        c.execute("INSERT OR IGNORE INTO danisan_terapistler(danisan_id,terapist_id,rol) VALUES(?,?,'ek')",(s['danisan_id'],tid))
     return {'seans_id':sid,'terapist_id':tid}
 
 _SAVE_318=_save_kind
@@ -3891,7 +3877,7 @@ def _save_kind(kind,d):
     if kind=='kayitli_seans_terapisti':return kayitli_seans_terapist_degistir(d)
     return _SAVE_318(kind,d)
 
-APP_VERSION='3.21.2'
+APP_VERSION='3.21.3'
 _INIT_3211=init_db
 
 def init_db():
@@ -3901,6 +3887,22 @@ def init_db():
             if not c.execute("SELECT 1 FROM ayarlar WHERE anahtar='schema_3212'").fetchone():
                 _pilates_seans_terapistlerini_uzlastir(c)
                 c.execute("INSERT INTO ayarlar(anahtar,deger) VALUES('schema_3212','1')")
+            c.execute("INSERT OR REPLACE INTO ayarlar(anahtar,deger) VALUES('app_version',?)",(APP_VERSION,))
+
+_INIT_3212=init_db
+
+def _tek_danisan_terapist_atamalarini_duzelt(c):
+    c.execute('DELETE FROM danisan_terapistler')
+    c.execute("INSERT INTO danisan_terapistler(danisan_id,terapist_id,rol) SELECT id,terapist_id,'primary' FROM danisanlar WHERE terapist_id IS NOT NULL")
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_danisan_tek_terapist ON danisan_terapistler(danisan_id)')
+
+def init_db():
+    _INIT_3212()
+    with _INIT_LOCK:
+        with transaction() as c:
+            if not c.execute("SELECT 1 FROM ayarlar WHERE anahtar='schema_3213'").fetchone():
+                _tek_danisan_terapist_atamalarini_duzelt(c)
+                c.execute("INSERT INTO ayarlar(anahtar,deger) VALUES('schema_3213','1')")
             c.execute("INSERT OR REPLACE INTO ayarlar(anahtar,deger) VALUES('app_version',?)",(APP_VERSION,))
 
 if CLOUD_MODE:

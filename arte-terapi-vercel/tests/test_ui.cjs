@@ -8,7 +8,7 @@ vm.runInContext("state.boot=fixture.boot;state.boot.paketler=fixture.data.paketl
 (async()=>{
 fixture.boot.terapistler=[{id:1,ad:'A',soyad:'Bir',aktif:1},{id:2,ad:'B',soyad:'İki',aktif:1}];fixture.boot.hizmetler=[{id:1,terapist_id:1,terapist_ids:[1,2],terapist_adi:'A, B',alan_adi:'Ortak',kategori:'ftr',aktif:1,seans_ucreti:1000}];
 await vm.runInContext("openEditor('hizmetler',fixture.boot.hizmetler[0])",ctx);let fields=nodes.get('fields').innerHTML;assert.equal((fields.match(/name=\"service_therapists\"/g)||[]).length,2);assert.equal((fields.match(/name=\"service_therapists\" value=\"[12]\" checked/g)||[]).length,2);
-await vm.runInContext("openEditor('danisanlar',{})",ctx);fields=nodes.get('fields').innerHTML;assert(fields.includes('Pilates terapisti'));assert(fields.includes('<details>'));assert(!fields.includes('TC kimlik numarası'));
+await vm.runInContext("openEditor('danisanlar',{})",ctx);fields=nodes.get('fields').innerHTML;assert(fields.includes('Pilates terapisti'));assert(!fields.includes('name="terapist_ids"'));assert(fields.includes('<details>'));assert(!fields.includes('TC kimlik numarası'));
 fixture.boot.odalar.push({id:1,ad:'Oda 1',kategori:'uygulama',aktif:1});
 await vm.runInContext("openEditor('seanslar',{})",ctx);fields=nodes.get('fields').innerHTML;assert(fields.includes('name="oda_id" value="3"'));assert(!fields.includes('Oda 1'));
 await vm.runInContext("action('therapist-new','')",ctx);fields=nodes.get('fields').innerHTML;assert(fields.includes('value="Pilates"'));

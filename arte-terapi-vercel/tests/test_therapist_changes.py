@@ -133,10 +133,39 @@ class TherapistChangeTest(unittest.TestCase):
         c=self.call('get_db')
         try:
             ensure_schema(c,lambda:'unused',reconcile=self.m['_pilates_seans_terapistlerini_uzlastir'])
-            self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'8')
+            self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'9')
         finally:c.close()
         self.assertEqual(self.call('seans_detay',sid)['terapist_id'],4)
         self.assertEqual(self.rows('SELECT terapist_id FROM odemeler WHERE seans_id=?',(sid,))[0]['terapist_id'],4)
+
+    def test_client_has_one_assignment_even_after_session_and_change(self):
+        pid=self.package()
+        self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,saat='08:00')
+        self.assertEqual([r['terapist_id'] for r in self.rows('SELECT terapist_id FROM danisan_terapistler WHERE danisan_id=?',(self.a,))],[1])
+        with self.assertRaises(ValueError):
+            self.call('danisan_guncelle',{'id':self.a,'terapist_id':3,'terapist_ids':[1,3]})
+        self.assertEqual(self.call('danisan_detay',self.a)['terapist_id'],1)
+        self.call('danisan_guncelle',{'id':self.a,'terapist_id':3})
+        self.assertEqual([r['terapist_id'] for r in self.rows('SELECT terapist_id FROM danisan_terapistler WHERE danisan_id=?',(self.a,))],[3])
+        self.assertEqual(len(self.call('danisan_detay',self.a)['terapistler']),1)
+
+    def test_cloud_upgrade_removes_legacy_extra_assignments(self):
+        from cloud.runtime import ensure_schema
+        with self.m['transaction']() as c:
+            c.execute('CREATE TABLE cloud_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
+            c.execute("INSERT INTO cloud_meta VALUES('version','8')")
+            c.execute('DROP INDEX idx_danisan_tek_terapist')
+            c.execute("INSERT INTO danisan_terapistler VALUES(?,?,'ek')",(self.a,3))
+        c=self.call('get_db')
+        try:
+            ensure_schema(c,lambda:'unused',single_therapist=self.m['_tek_danisan_terapist_atamalarini_duzelt'])
+            self.assertEqual(c.execute("SELECT value FROM cloud_meta WHERE key='version'").fetchone()[0],'9')
+        finally:c.close()
+        self.assertEqual(self.rows('SELECT terapist_id,rol FROM danisan_terapistler WHERE danisan_id=?',(self.a,)),
+            [{'terapist_id':1,'rol':'primary'}])
+        with self.assertRaises(Exception):
+            with self.m['transaction']() as c:
+                c.execute("INSERT INTO danisan_terapistler VALUES(?,?,'ek')",(self.a,3))
 
     def test_renewal_copies_only_current_therapist_program(self):
         self.call('_save_record','terapistler',{'ad':'Yeni Pilates','uzmanlik':'Pilates','aktif':1})
