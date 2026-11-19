@@ -51,6 +51,35 @@ class TherapistChangeTest(unittest.TestCase):
         self.assertEqual(session_earnings.report(self.m,self.today[:7],4)['toplam_seans'],1)
         self.assertEqual(session_earnings.report(self.m,self.today[:7],3)['toplam_seans'],0)
 
+    def test_backdated_change_repairs_recorded_sessions_and_earnings(self):
+        self.call('_save_record','terapistler',{'ad':'Melisa','uzmanlik':'Pilates','aktif':1})
+        prior=(date.today()-timedelta(days=2)).isoformat()
+        selected=(date.today()-timedelta(days=1)).isoformat()
+        pid=self.call('paket_kaydet',{'danisan_id':self.a,'ad':'Dönem','fiyat':1200,
+            'seans_sayisi':4,'baslangic':prior,'bitis':(date.today()+timedelta(days=14)).isoformat()})
+        old_sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,tarih=prior,saat='08:00')
+        selected_sid=self.sess(terapist_id=3,hizmet_id=11,paket_id=pid,tarih=selected,saat='09:00')
+        with self.m['transaction']() as c:
+            c.execute('INSERT INTO odemeler(danisan_id,terapist_id,tarih,tutar,seans_id) VALUES(?,?,?,?,?)',
+                (self.a,3,selected,300,selected_sid))
+        self.call('danisan_guncelle',{'id':self.a,'terapist_id':4})
+        self.assertEqual(self.call('seans_detay',selected_sid)['terapist_id'],3)
+        self.call('danisan_guncelle',{'id':self.a,'terapist_id':4,'terapist_gecis_tarihi':selected})
+        self.assertEqual(self.call('seans_detay',old_sid)['terapist_id'],3)
+        self.assertEqual(self.call('seans_detay',selected_sid)['terapist_id'],4)
+        self.assertEqual(self.rows('SELECT terapist_id FROM odemeler WHERE seans_id=?',(selected_sid,))[0]['terapist_id'],4)
+        self.assertEqual(session_earnings.report(self.m,selected[:7],4)['toplam_seans'],1)
+        self.assertEqual(session_earnings.report(self.m,selected[:7],3)['toplam_seans'],int(prior[:7]==selected[:7]))
+
+    def test_program_therapist_selection_updates_client_assignment(self):
+        pid=self.package()
+        self.call('program_kaydet',{'danisan_id':self.a,'terapist_id':3,'hizmet_id':11,
+            'paket_id':pid,'baslangic':self.today,'bitis':(date.today()+timedelta(days=21)).isoformat(),
+            'slots':[{'gun_index':date.today().weekday(),'saat':'14:00'}]})
+        self.assertEqual(self.call('danisan_detay',self.a)['terapist_id'],3)
+        self.assertEqual(self.rows('SELECT terapist_id FROM danisan_terapistler WHERE danisan_id=?',(self.a,)),
+            [{'terapist_id':3}])
+
     def test_client_change_moves_current_and_future_program_only(self):
         self.call('_save_record','terapistler',{'ad':'Yeni Pilates','uzmanlik':'Pilates','aktif':1})
         start=(date.today()-timedelta(days=7)).isoformat()
@@ -199,7 +228,7 @@ class TherapistChangeTest(unittest.TestCase):
             'slots':[{'gun_index':date.today().weekday(),'saat':'14:00'}]})
         with self.assertRaises(ValueError):
             self.call('danisan_guncelle',{'id':self.a,'terapist_id':4})
-        self.assertEqual(self.call('danisan_detay',self.a)['terapist_id'],1)
+        self.assertEqual(self.call('danisan_detay',self.a)['terapist_id'],3)
 
     def test_group_members_can_move_to_same_therapist(self):
         self.call('_save_record','terapistler',{'ad':'Yeni Pilates','uzmanlik':'Pilates','aktif':1})
